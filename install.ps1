@@ -787,7 +787,6 @@ function Write-JsonConfigFile {
     $content = $Object | ConvertTo-Json -Depth 10
     Write-TextUtf8NoBom -Path $Path -Content $content
     Write-Success "已写入配置文件: $Path"
-    Show-FilePreview -Path $Path -Title $Title
 }
 
 function ConvertTo-TomlBasicString {
@@ -1645,6 +1644,11 @@ function Get-MissingGeminiMcpCommands {
         $server = $serverProperty.Value
         if ($null -eq $server) { continue }
 
+        if ([string]::IsNullOrWhiteSpace($serverName)) {
+            [void]$missing.Add("检测到无效的 MCP server 名称。请检查 Gemini 配置文件中的 mcpServers 配置。")
+            continue
+        }
+
         $commandProperty = $server.PSObject.Properties["command"]
         if (-not $commandProperty) { continue }
 
@@ -1932,7 +1936,6 @@ function Install-CodexCli {
         Backup-FileIfExists -Path $configPath | Out-Null
         Write-TextUtf8NoBom -Path $configPath -Content $codexConfig.Content
         Write-Success "已写入 Codex CLI 配置: $configPath"
-        Show-FilePreview -Path $configPath -Title "Codex CLI 配置文件"
 
         Remove-PersistentEnvVarIfMatches -Name "OPENAI_API_KEY" -ExpectedValue $ApiKey
         $result.configured = $true
@@ -2025,10 +2028,6 @@ function Install-GeminiCli {
         Remove-PersistentEnvVarIfMatches -Name "GEMINI_MODEL" -ExpectedValue $Script:GEMINI_MODEL
         Set-PersistentEnvVar -Name "GEMINI_API_KEY" -Value $ApiKey
         Set-PersistentEnvVar -Name "GOOGLE_GEMINI_BASE_URL" -Value $Script:API_BASE_URL
-        Show-EnvPreview -Title "Gemini 必需环境变量" -Entries @{
-            GEMINI_API_KEY          = $ApiKey
-            GOOGLE_GEMINI_BASE_URL  = $Script:API_BASE_URL
-        }
 
         foreach ($warning in (Get-MissingGeminiMcpCommands -Settings $geminiSettings)) {
             Add-ToolWarning -Result $result -Message $warning

@@ -150,7 +150,7 @@ npm config set registry https://registry.npmmirror.com
 - Claude Code：脚本会写入 `settings.json`，并清理旧版本脚本遗留的 `ANTHROPIC_*` 用户环境变量，避免冲突。
 - Codex CLI：官方配置文件格式是 `TOML`，不是 JSON；脚本会写入 `%USERPROFILE%\.codex\config.toml`。
 - Gemini CLI：当前官方版本在 API Key 模式下仍要求 `GEMINI_API_KEY` 环境变量；脚本会同时写入 `settings.json` 和该环境变量。
-- 每次安装后，脚本都会把 MAX API 线路选择结果、最终写入的配置内容、PowerShell shim 清理结果、执行策略诊断和真实调用测试结果打印到终端，并在覆盖前自动备份旧配置文件。
+- 每次安装后，脚本都会把 MAX API 线路选择结果、配置文件写入路径、PowerShell shim 清理结果、执行策略诊断和真实调用测试结果打印到终端，并在覆盖前自动备份旧配置文件。
 
 ### 想卸载某个工具
 
