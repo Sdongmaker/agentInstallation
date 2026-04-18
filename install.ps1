@@ -27,9 +27,73 @@ $Script:GEMINI_MODEL  = "gemini-3.1-pro-preview"
 # UTF-8 无 BOM 编码（PS 5.1 默认 UTF8 带 BOM，某些解析器不兼容）
 $Script:UTF8NoBom = [System.Text.UTF8Encoding]::new($false)
 
+# npm 可执行文件路径（稍后在 Resolve-NpmPath 中填充）
+$Script:NpmExe = $null
+
 # ============================================================
 # 辅助函数
 # ============================================================
+
+function Resolve-NpmPath {
+    <#
+    .SYNOPSIS
+        找到可用的 npm 可执行文件。
+        优先使用 npm.cmd（不受 PS 执行策略限制），
+        回退到 npm.ps1 或 npm。
+    #>
+    # 优先查找 npm.cmd
+    $cmd = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $Script:NpmExe = $cmd.Source
+        return
+    }
+    # 回退到 npm（可能是 .ps1 或 .exe）
+    $cmd = Get-Command "npm" -ErrorAction SilentlyContinue
+    if ($cmd) {
+        $Script:NpmExe = $cmd.Source
+        return
+    }
+    $Script:NpmExe = $null
+}
+
+function Invoke-Npm {
+    <#
+    .SYNOPSIS
+        调用 npm，自动使用 .cmd 版本避免 PS 执行策略问题
+    #>
+    param([string[]]$Arguments)
+    if (-not $Script:NpmExe) { Resolve-NpmPath }
+    if (-not $Script:NpmExe) {
+        Write-Err "npm 未找到，请确认 Node.js 已正确安装"
+        return $null
+    }
+    & $Script:NpmExe @Arguments
+}
+
+function Invoke-ToolCommand {
+    <#
+    .SYNOPSIS
+        调用工具命令（claude/codex/gemini），优先使用 .cmd 版本避免 PS 执行策略问题
+    #>
+    param([string]$Command, [string[]]$Arguments)
+    # 优先 .cmd
+    $cmd = Get-Command "$Command.cmd" -ErrorAction SilentlyContinue
+    if (-not $cmd) {
+        $cmd = Get-Command $Command -ErrorAction SilentlyContinue
+    }
+    if (-not $cmd) { return $null }
+    & $cmd.Source @Arguments 2>$null
+}
+
+function Test-ToolExists {
+    <#
+    .SYNOPSIS
+        检测工具是否存在，同时查找 .cmd 和原始命令
+    #>
+    param([string]$Command)
+    $null -ne (Get-Command "$Command.cmd" -ErrorAction SilentlyContinue) -or
+    $null -ne (Get-Command $Command -ErrorAction SilentlyContinue)
+}
 
 function Write-Banner {
     Write-Host ""
@@ -423,24 +487,29 @@ function Install-NodeIfNeeded {
 function Set-NpmMirror {
     Write-Step "配置 npm 国内镜像"
 
-    # 尝试多种方式设置，确保兼容不同 npm 版本
-    # npm 9+ 推荐 --location=user
-    $setResult = npm config set registry $Script:NPM_MIRROR --location=user 2>&1
-    if ($LASTEXITCODE -ne 0) {
-        # 低版本 npm 不支持 --location 参数，回退
-        npm config set registry $Script:NPM_MIRROR 2>$null
+    # 解析 npm 路径
+    Resolve-NpmPath
+    if (-not $Script:NpmExe) {
+        Write-Err "npm 未找到，跳过镜像配置"
+        # 设置环境变量作为备用
+        $env:npm_config_registry = $Script:NPM_MIRROR
+        return
     }
 
-    # 验证设置（trim 输出，避免换行符干扰）
-    $current = (npm config get registry 2>$null)
+    # 尝试多种方式设置，确保兼容不同 npm 版本
+    Invoke-Npm @("config", "set", "registry", $Script:NPM_MIRROR, "--location=user") 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        Invoke-Npm @("config", "set", "registry", $Script:NPM_MIRROR) 2>$null
+    }
+
+    # 验证设置
+    $current = Invoke-Npm @("config", "get", "registry") 2>$null
     if ($current) { $current = $current.Trim().TrimEnd('/') }
     $expected = $Script:NPM_MIRROR.TrimEnd('/')
 
     if ($current -eq $expected) {
         Write-Success "npm 镜像已设置: $Script:NPM_MIRROR"
     } else {
-        # 即使 config get 返回默认值，实际 install 可能已生效
-        # 设置环境变量作为双保险
         $env:npm_config_registry = $Script:NPM_MIRROR
         Write-Warn "npm config 设置可能未生效（当前: $current），已通过环境变量补偿"
         Write-Info "后续 npm install 将使用镜像: $Script:NPM_MIRROR"
@@ -458,25 +527,26 @@ function Install-ClaudeCode {
 
     # 检测是否已安装
     $isUpdate = $false
-    if (Test-CommandExists "claude") {
-        $currentVer = claude --version 2>$null
+    if (Test-ToolExists "claude") {
+        $currentVer = Invoke-ToolCommand "claude" @("--version")
         Write-Info "Claude Code 已安装: $currentVer，将更新到最新版本"
         $isUpdate = $true
     }
 
     $action = if ($isUpdate) { "更新" } else { "安装" }
     Write-Info "正在通过 npm ${action} @anthropic-ai/claude-code ..."
-    npm install -g @anthropic-ai/claude-code 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    Invoke-Npm @("install", "-g", "@anthropic-ai/claude-code") 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
 
     # 验证安装
     Refresh-PathEnv
-    if (-not (Test-CommandExists "claude")) {
+    Resolve-NpmPath
+    if (-not (Test-ToolExists "claude")) {
         Write-Err "Claude Code 安装失败"
         Write-Info "可尝试手动安装: npm install -g @anthropic-ai/claude-code"
         return $false
     }
 
-    $newVer = claude --version 2>$null
+    $newVer = Invoke-ToolCommand "claude" @("--version")
     if ($isUpdate) {
         Write-Success "Claude Code 已更新: $currentVer → $newVer"
     } else {
@@ -526,25 +596,26 @@ function Install-CodexCli {
     # 检测是否已安装
     $isUpdate = $false
     $currentVer = $null
-    if (Test-CommandExists "codex") {
-        $currentVer = codex --version 2>$null
+    if (Test-ToolExists "codex") {
+        $currentVer = Invoke-ToolCommand "codex" @("--version")
         Write-Info "Codex CLI 已安装: $currentVer，将更新到最新版本"
         $isUpdate = $true
     }
 
     $action = if ($isUpdate) { "更新" } else { "安装" }
     Write-Info "正在通过 npm ${action} @openai/codex ..."
-    npm install -g @openai/codex 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    Invoke-Npm @("install", "-g", "@openai/codex") 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
 
     # 验证安装
     Refresh-PathEnv
-    if (-not (Test-CommandExists "codex")) {
+    Resolve-NpmPath
+    if (-not (Test-ToolExists "codex")) {
         Write-Err "Codex CLI 安装失败"
         Write-Info "可尝试手动安装: npm install -g @openai/codex"
         return $false
     }
 
-    $newVer = codex --version 2>$null
+    $newVer = Invoke-ToolCommand "codex" @("--version")
     if ($isUpdate) {
         Write-Success "Codex CLI 已更新: $currentVer → $newVer"
     } else {
@@ -599,25 +670,26 @@ function Install-GeminiCli {
     # 检测是否已安装
     $isUpdate = $false
     $currentVer = $null
-    if (Test-CommandExists "gemini") {
-        $currentVer = gemini --version 2>$null
+    if (Test-ToolExists "gemini") {
+        $currentVer = Invoke-ToolCommand "gemini" @("--version")
         Write-Info "Gemini CLI 已安装: $currentVer，将更新到最新版本"
         $isUpdate = $true
     }
 
     $action = if ($isUpdate) { "更新" } else { "安装" }
     Write-Info "正在通过 npm ${action} @google/gemini-cli ..."
-    npm install -g @google/gemini-cli 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
+    Invoke-Npm @("install", "-g", "@google/gemini-cli") 2>&1 | ForEach-Object { Write-Host "    $_" -ForegroundColor DarkGray }
 
     # 验证安装
     Refresh-PathEnv
-    if (-not (Test-CommandExists "gemini")) {
+    Resolve-NpmPath
+    if (-not (Test-ToolExists "gemini")) {
         Write-Err "Gemini CLI 安装失败"
         Write-Info "可尝试手动安装: npm install -g @google/gemini-cli"
         return $false
     }
 
-    $newVer = gemini --version 2>$null
+    $newVer = Invoke-ToolCommand "gemini" @("--version")
     if ($isUpdate) {
         Write-Success "Gemini CLI 已更新: $currentVer → $newVer"
     } else {
@@ -736,6 +808,13 @@ function Show-Summary {
 function Main {
     # 不使用 "Stop"，避免 npm 输出的警告行被当作终止错误
     $ErrorActionPreference = "Continue"
+
+    # ★★★ 关键修复：设置当前进程的执行策略为 Bypass ★★★
+    # 不需要管理员权限，仅影响当前 PowerShell 进程
+    # 解决便携版 Node.js 的 npm.ps1 被执行策略拦截的问题
+    try {
+        Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass -Force -ErrorAction SilentlyContinue
+    } catch {}
 
     # 设置终端编码为 UTF-8，确保中文和 Unicode 字符正常显示
     try {
