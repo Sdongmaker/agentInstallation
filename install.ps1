@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     MAX API Windows installer for Claude Code, Codex CLI, and Gemini CLI.
@@ -15,6 +15,7 @@ $Script:NODE_MIRROR    = "https://npmmirror.com/mirrors/node"
 $Script:NODE_VERSION   = "v20.18.1"
 $Script:GIT_VERSION    = "2.47.1"
 $Script:GIT_RELEASE    = "v2.47.1.windows.2"
+$Script:INSTALLER_VERSION = "v2.0"
 
 $Script:CLAUDE_MODEL = "claude-opus-4-6"
 $Script:CODEX_MODEL  = "gpt-5.4"
@@ -25,37 +26,46 @@ $Script:NpmExe = $null
 
 function Write-Banner {
     Write-Host ""
-    Write-Host "  MAX API Installer" -ForegroundColor Magenta
-    Write-Host "  Claude Code / Codex CLI / Gemini CLI" -ForegroundColor Gray
-    Write-Host "  Service: $Script:API_BASE_URL" -ForegroundColor Gray
+    Write-Host "  ███╗   ███╗ █████╗ ██╗  ██╗     █████╗ ██████╗ ██╗" -ForegroundColor Magenta
+    Write-Host "  ████╗ ████║██╔══██╗╚██╗██╔╝    ██╔══██╗██╔══██╗██║" -ForegroundColor Magenta
+    Write-Host "  ██╔████╔██║███████║ ╚███╔╝     ███████║██████╔╝██║" -ForegroundColor Magenta
+    Write-Host "  ██║╚██╔╝██║██╔══██║ ██╔██╗     ██╔══██║██╔═══╝ ██║" -ForegroundColor Magenta
+    Write-Host "  ██║ ╚═╝ ██║██║  ██║██╔╝ ██╗    ██║  ██║██║     ██║" -ForegroundColor Magenta
+    Write-Host "  ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝    ╚═╝  ╚═╝╚═╝     ╚═╝" -ForegroundColor Magenta
+    Write-Host ""
+    Write-Host "  ┌──────────────────────────────────────────────────┐" -ForegroundColor DarkGray
+    Write-Host ("  │  AI 编程助手一键安装工具 {0,-23} │" -f $Script:INSTALLER_VERSION) -ForegroundColor Gray
+    Write-Host "  │  支持: Claude Code · Codex CLI · Gemini CLI      │" -ForegroundColor Gray
+    Write-Host ("  │  服务: {0,-39} │" -f $Script:API_BASE_URL) -ForegroundColor Gray
+    Write-Host "  └──────────────────────────────────────────────────┘" -ForegroundColor DarkGray
     Write-Host ""
 }
 
 function Write-Step {
     param([string]$Message)
     Write-Host ""
-    Write-Host "== $Message" -ForegroundColor Green
+    Write-Host "▶ $Message" -ForegroundColor Green
     Write-Host ("-" * 60) -ForegroundColor DarkGray
 }
 
 function Write-Info {
     param([string]$Message)
-    Write-Host "  [INFO] $Message" -ForegroundColor Gray
+    Write-Host "  [信息] $Message" -ForegroundColor Gray
 }
 
 function Write-Success {
     param([string]$Message)
-    Write-Host "  [ OK ] $Message" -ForegroundColor Green
+    Write-Host "  [成功] $Message" -ForegroundColor Green
 }
 
 function Write-Warn {
     param([string]$Message)
-    Write-Host "  [WARN] $Message" -ForegroundColor Yellow
+    Write-Host "  [警告] $Message" -ForegroundColor Yellow
 }
 
 function Write-Err {
     param([string]$Message)
-    Write-Host "  [ERR ] $Message" -ForegroundColor Red
+    Write-Host "  [错误] $Message" -ForegroundColor Red
 }
 
 function Resolve-NpmPath {
@@ -79,7 +89,7 @@ function Invoke-Npm {
 
     if (-not $Script:NpmExe) { Resolve-NpmPath }
     if (-not $Script:NpmExe) {
-        Write-Err "npm was not found. Please install Node.js first."
+        Write-Err "未检测到 npm，请先安装 Node.js。"
         return $null
     }
 
@@ -96,7 +106,7 @@ function Invoke-NpmCommand {
     if (-not $Script:NpmExe) {
         return [PSCustomObject]@{
             ExitCode = 1
-            Output   = @("npm executable was not found")
+            Output   = @("未检测到 npm 可执行文件")
         }
     }
 
@@ -207,20 +217,20 @@ function Install-WithWinget {
     )
 
     if ($Upgrade) {
-        Write-Info "Upgrading $FriendlyName with winget..."
+        Write-Info "正在通过 winget 升级 $FriendlyName ..."
         winget upgrade --id $PackageId --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Null
     } else {
-        Write-Info "Installing $FriendlyName with winget..."
+        Write-Info "正在通过 winget 安装 $FriendlyName ..."
         winget install --id $PackageId --accept-source-agreements --accept-package-agreements --silent 2>&1 | Out-Null
     }
 
     if ($LASTEXITCODE -eq 0) {
         Refresh-PathEnv
-        Write-Success "$FriendlyName completed successfully."
+        Write-Success "$FriendlyName 已完成安装。"
         return $true
     }
 
-    Write-Warn "winget failed for $FriendlyName. Falling back to the manual download path."
+    Write-Warn "$FriendlyName 的 winget 安装失败，正在回退到手动下载安装方案。"
     return $false
 }
 
@@ -232,27 +242,27 @@ function Download-File {
     )
 
     $downloadUrl = if ($UseProxy) { "$Script:GITHUB_PROXY/$Url" } else { $Url }
-    Write-Info "Downloading $downloadUrl"
+    Write-Info "正在下载 $downloadUrl"
 
     try {
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         Invoke-WebRequest -Uri $downloadUrl -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
-        Write-Success "Downloaded to $OutFile"
+        Write-Success "下载完成: $OutFile"
         return $true
     } catch {
         if ($UseProxy) {
-            Write-Warn "Proxy download failed. Retrying the original URL."
+            Write-Warn "代理下载失败，正在重试原始地址。"
             try {
                 Invoke-WebRequest -Uri $Url -OutFile $OutFile -UseBasicParsing -ErrorAction Stop
-                Write-Success "Downloaded to $OutFile"
+                Write-Success "下载完成: $OutFile"
                 return $true
             } catch {
-                Write-Err "Direct download failed: $($_.Exception.Message)"
+                Write-Err "直连下载失败: $($_.Exception.Message)"
                 return $false
             }
         }
 
-        Write-Err "Download failed: $($_.Exception.Message)"
+        Write-Err "下载失败: $($_.Exception.Message)"
         return $false
     }
 }
@@ -265,7 +275,7 @@ function Set-PersistentEnvVar {
 
     [System.Environment]::SetEnvironmentVariable($Name, $Value, "User")
     Set-Item -Path "Env:\$Name" -Value $Value
-    Write-Info "Set user environment variable $Name"
+    Write-Info "已设置用户环境变量 $Name"
 }
 
 function Remove-PersistentEnvVar {
@@ -273,7 +283,7 @@ function Remove-PersistentEnvVar {
 
     [System.Environment]::SetEnvironmentVariable($Name, $null, "User")
     Remove-Item -Path "Env:\$Name" -ErrorAction SilentlyContinue
-    Write-Info "Removed user environment variable $Name"
+    Write-Info "已移除用户环境变量 $Name"
 }
 
 function Remove-PersistentEnvVarIfMatches {
@@ -289,7 +299,7 @@ function Remove-PersistentEnvVarIfMatches {
     }
 
     if ($currentUserValue -ne $ExpectedValue) {
-        Write-Warn "Environment variable $Name exists with a different value. Leaving it unchanged."
+        Write-Warn "环境变量 $Name 已存在且值不同，保持原值不变。"
         return
     }
 
@@ -314,7 +324,7 @@ function Backup-FileIfExists {
     $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
     $backupPath = "$Path.bak.$timestamp"
     Copy-Item -Path $Path -Destination $backupPath -Force
-    Write-Info "Backed up existing file to $backupPath"
+    Write-Info "已备份现有文件到 $backupPath"
     return $backupPath
 }
 
@@ -576,7 +586,7 @@ function Read-JsonConfigOrDefault {
     try {
         $raw = Read-TextUtf8 -Path $Path
         if ([string]::IsNullOrWhiteSpace($raw)) {
-            Write-Warn "$Label is empty. A fresh config will be created."
+            Write-Warn "$Label 为空，将创建新的配置文件。"
             return [PSCustomObject]@{}
         }
 
@@ -587,7 +597,7 @@ function Read-JsonConfigOrDefault {
 
         return $parsed
     } catch {
-        Write-Warn "$Label could not be parsed. A fresh config will be created after backing up the current file."
+        Write-Warn "$Label 无法解析，备份当前文件后将重新生成配置。"
         return [PSCustomObject]@{}
     }
 }
@@ -599,16 +609,16 @@ function Show-TextPreview {
         [string]$Path
     )
 
-    Write-Warn "Preview below is redacted to avoid printing raw secrets."
+    Write-Warn "下方预览已做脱敏处理，不会输出原始密钥。"
     Write-Host "  + $Title" -ForegroundColor DarkGray
     if (-not [string]::IsNullOrWhiteSpace($Path)) {
-        Write-Host "  Path: $Path" -ForegroundColor DarkGray
+        Write-Host "  路径: $Path" -ForegroundColor DarkGray
     }
     Write-Host "  --------------------------------------------------" -ForegroundColor DarkGray
 
     $safeContent = Redact-TextSecrets -Content $Content
     if ([string]::IsNullOrEmpty($safeContent)) {
-        Write-Host "  <empty>" -ForegroundColor DarkGray
+        Write-Host "  <空>" -ForegroundColor DarkGray
     } else {
         foreach ($line in ($safeContent -split "`r?`n")) {
             Write-Host "  $line" -ForegroundColor Gray
@@ -625,7 +635,7 @@ function Show-FilePreview {
     )
 
     if (-not (Test-Path $Path)) {
-        Write-Warn "Preview file was not found: $Path"
+        Write-Warn "未找到要预览的文件: $Path"
         return
     }
 
@@ -633,7 +643,7 @@ function Show-FilePreview {
         $content = Read-TextUtf8 -Path $Path
         Show-TextPreview -Title $Title -Content $content -Path $Path
     } catch {
-        Write-Warn "Could not read $Path for preview: $($_.Exception.Message)"
+        Write-Warn "无法读取 $Path 进行预览: $($_.Exception.Message)"
     }
 }
 
@@ -643,7 +653,7 @@ function Show-EnvPreview {
         [hashtable]$Entries
     )
 
-    Write-Warn "Environment preview below is redacted."
+    Write-Warn "下方环境变量预览已做脱敏处理。"
     Write-Host "  + $Title" -ForegroundColor DarkGray
     Write-Host "  --------------------------------------------------" -ForegroundColor DarkGray
     foreach ($key in ($Entries.Keys | Sort-Object)) {
@@ -666,7 +676,7 @@ function Write-JsonConfigFile {
     Backup-FileIfExists -Path $Path | Out-Null
     $content = $Object | ConvertTo-Json -Depth 10
     Write-TextUtf8NoBom -Path $Path -Content $content
-    Write-Success "Wrote config file: $Path"
+    Write-Success "已写入配置文件: $Path"
     Show-FilePreview -Path $Path -Title $Title
 }
 
@@ -704,7 +714,7 @@ function Try-NormalizeCodexProjectSectionHeader {
                 Applicable = $true
                 Success    = $false
                 Header     = $null
-                Warning    = "Skipped malformed Codex project table header: [$SectionName]"
+                Warning    = "已跳过格式错误的 Codex 项目表头: [$SectionName]"
             }
         }
     } else {
@@ -712,7 +722,7 @@ function Try-NormalizeCodexProjectSectionHeader {
             Applicable = $true
             Success    = $false
             Header     = $null
-            Warning    = "Skipped malformed Codex project table header: [$SectionName]"
+            Warning    = "已跳过格式错误的 Codex 项目表头: [$SectionName]"
         }
     }
 
@@ -787,7 +797,7 @@ function Build-CodexConfigContent {
     $remaining = (($remainingLines | ForEach-Object { "$_" }) -join "`n").Trim()
 
     $topLevelBlock = @"
-# Codex CLI config - generated by MAX API installer
+# Codex CLI 配置 - 由 MAX API 安装器生成
 model = "$Script:CODEX_MODEL"
 model_provider = "maxapi"
 "@
@@ -817,7 +827,7 @@ function Disable-PowerShellShimForCommand {
 
     $cmdShim = Get-Command "$Command.cmd" -ErrorAction SilentlyContinue
     if (-not $cmdShim) {
-        Write-Warn "Could not find $Command.cmd, so no PowerShell shim was disabled."
+        Write-Warn "未找到 $Command.cmd，无法禁用对应的 PowerShell shim。"
         return $false
     }
 
@@ -825,11 +835,11 @@ function Disable-PowerShellShimForCommand {
     $ps1Path = [System.IO.Path]::ChangeExtension($cmdPath, ".ps1")
     $disabledPath = "$ps1Path.maxapi-disabled"
 
-    Write-Info "$Command.cmd path: $cmdPath"
-    Write-Info "$Command.ps1 path: $ps1Path"
+    Write-Info "$Command.cmd 路径: $cmdPath"
+    Write-Info "$Command.ps1 路径: $ps1Path"
 
     if (-not (Test-Path $ps1Path)) {
-        Write-Success "$Command has no PowerShell shim to disable."
+        Write-Success "$Command 没有需要禁用的 PowerShell shim。"
         return $true
     }
 
@@ -839,10 +849,10 @@ function Disable-PowerShellShimForCommand {
         }
 
         Move-Item -Path $ps1Path -Destination $disabledPath -Force -ErrorAction Stop
-        Write-Success "Disabled $Command PowerShell shim: $disabledPath"
+        Write-Success "已禁用 $Command 的 PowerShell shim: $disabledPath"
         return $true
     } catch {
-        Write-Warn "Failed to disable $Command PowerShell shim: $($_.Exception.Message)"
+        Write-Warn "禁用 $Command 的 PowerShell shim 失败: $($_.Exception.Message)"
         return $false
     }
 }
@@ -852,11 +862,11 @@ function Disable-PowerShellShims {
 
     $uniqueCommands = @($Commands | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
     if ($uniqueCommands.Count -eq 0) {
-        Write-Info "No PowerShell shims need to be disabled."
+        Write-Info "没有需要禁用的 PowerShell shim。"
         return
     }
 
-    Write-Step "Disable PowerShell .ps1 shims"
+    Write-Step "禁用 PowerShell .ps1 shim"
     foreach ($command in $uniqueCommands) {
         Disable-PowerShellShimForCommand -Command $command | Out-Null
     }
@@ -872,29 +882,29 @@ function Remove-LegacyPowerShellWrapperProfiles {
         (Join-Path $env:USERPROFILE "Documents\PowerShell\profile.ps1")
     ) | Select-Object -Unique
 
-    Write-Step "Clean legacy PowerShell profile wrappers"
+    Write-Step "清理旧版 PowerShell profile 包装器"
 
     foreach ($profilePath in $profilePaths) {
         if (-not (Test-Path $profilePath)) {
-            Write-Info "Profile file not found: $profilePath"
+            Write-Info "未找到 profile 文件: $profilePath"
             continue
         }
 
         try {
             $existingContent = Read-TextUtf8 -Path $profilePath
         } catch {
-            Write-Warn ("Could not read {0}: {1}" -f $profilePath, $_.Exception.Message)
+            Write-Warn ("无法读取 {0}: {1}" -f $profilePath, $_.Exception.Message)
             continue
         }
 
         if ([string]::IsNullOrEmpty($existingContent)) {
-            Write-Info "Profile file is empty: $profilePath"
+            Write-Info "profile 文件为空: $profilePath"
             continue
         }
 
         $match = [regex]::Match($existingContent, $pattern)
         if (-not $match.Success) {
-            Write-Info "No legacy wrapper block found in $profilePath"
+            Write-Info "未在 $profilePath 中发现旧版包装器代码块"
             continue
         }
 
@@ -905,33 +915,33 @@ function Remove-LegacyPowerShellWrapperProfiles {
         Backup-FileIfExists -Path $profilePath | Out-Null
         if ([string]::IsNullOrWhiteSpace($updatedContent)) {
             Remove-Item $profilePath -Force -ErrorAction SilentlyContinue
-            Write-Success "Removed empty legacy profile file: $profilePath"
+            Write-Success "已删除空的旧版 profile 文件: $profilePath"
         } else {
             Write-TextUtf8NoBom -Path $profilePath -Content ($updatedContent + "`n")
-            Write-Success "Removed legacy wrapper block from: $profilePath"
+            Write-Success "已从 $profilePath 移除旧版包装器代码块"
         }
 
-        Show-TextPreview -Title "Removed legacy wrapper block" -Content $removedBlock -Path $profilePath
+        Show-TextPreview -Title "已移除的旧版包装器代码块" -Content $removedBlock -Path $profilePath
     }
 }
 
 function Repair-PowerShellExecutionPolicy {
-    Write-Step "Repair PowerShell execution policy"
+    Write-Step "修复 PowerShell 执行策略"
 
     try {
         Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop
-        Write-Success "Set CurrentUser execution policy to RemoteSigned."
+        Write-Success "已将 CurrentUser 执行策略设置为 RemoteSigned。"
     } catch {
-        Write-Warn "Failed to set CurrentUser execution policy: $($_.Exception.Message)"
+        Write-Warn "设置 CurrentUser 执行策略失败: $($_.Exception.Message)"
     }
 
     try {
         $diagnostics = Get-ExecutionPolicy -List | ForEach-Object {
             "$($_.Scope): $($_.ExecutionPolicy)"
         }
-        Show-TextPreview -Title "PowerShell execution policy diagnostics" -Content ($diagnostics -join "`n") -Path $null
+        Show-TextPreview -Title "PowerShell 执行策略诊断" -Content ($diagnostics -join "`n") -Path $null
     } catch {
-        Write-Warn "Could not read execution policy diagnostics: $($_.Exception.Message)"
+        Write-Warn "无法读取 PowerShell 执行策略诊断信息: $($_.Exception.Message)"
     }
 }
 
@@ -942,49 +952,49 @@ function Test-IsAdmin {
 }
 
 function Test-Environment {
-    Write-Step "Environment checks"
+    Write-Step "环境检测"
 
     if (-not ($env:OS -eq "Windows_NT")) {
-        Write-Err "This installer only supports Windows."
+        Write-Err "该安装器仅支持 Windows。"
         return $false
     }
-    Write-Success "Operating system: Windows"
+    Write-Success "操作系统: Windows"
 
     if (-not [System.Environment]::Is64BitOperatingSystem) {
-        Write-Err "This installer only supports 64-bit Windows."
+        Write-Err "该安装器仅支持 64 位 Windows。"
         return $false
     }
-    Write-Success "Architecture: x86_64"
+    Write-Success "系统架构: x86_64"
 
-    Write-Success "PowerShell version: $($PSVersionTable.PSVersion)"
+    Write-Success "PowerShell 版本: $($PSVersionTable.PSVersion)"
 
     if (Test-IsAdmin) {
-        Write-Success "Administrator privileges: yes"
+        Write-Success "管理员权限: 是"
     } else {
-        Write-Warn "Administrator privileges: no. Admin rights may be required when installing Git or Node.js."
+        Write-Warn "管理员权限: 否。安装 Git 或 Node.js 时可能需要管理员权限。"
     }
 
     if (Test-WingetAvailable) {
-        Write-Success "winget: available"
+        Write-Success "winget: 可用"
     } else {
-        Write-Warn "winget: unavailable. The installer will fall back to direct downloads when needed."
+        Write-Warn "winget: 不可用。需要时将回退到直接下载方案。"
     }
 
     return $true
 }
 
 function Show-ToolMenu {
-    Write-Step "Choose which tools to install"
+    Write-Step "选择要安装的工具"
     Write-Host ""
     Write-Host "  [1] Claude Code" -ForegroundColor White
     Write-Host "  [2] Codex CLI" -ForegroundColor White
     Write-Host "  [3] Gemini CLI" -ForegroundColor White
     Write-Host ""
-    Write-Host "  [A] All tools" -ForegroundColor Yellow
+    Write-Host "  [A] 全部安装" -ForegroundColor Yellow
     Write-Host ""
 
     while ($true) {
-        $choice = Read-Host "  Enter your choice (for example: 1,3 or A)"
+        $choice = Read-Host "  请输入选项（例如：1,3 或 A）"
         $choice = $choice.Trim().ToUpper()
 
         if ($choice -eq "A") {
@@ -1007,15 +1017,15 @@ function Show-ToolMenu {
             return ($tools | Select-Object -Unique)
         }
 
-        Write-Warn "Invalid selection. Use 1-3, separated by commas for multi-select, or A for all."
+        Write-Warn "无效选项。请输入 1-3，可用逗号分隔多选，或输入 A 表示全部安装。"
     }
 }
 
 function Read-ApiKey {
-    Write-Step "Configure API key"
+    Write-Step "配置 API Key"
     Write-Host ""
-    Write-Host "  Enter your MAX API key from $Script:API_BASE_URL" -ForegroundColor White
-    Write-Host "  The input is hidden. That is expected." -ForegroundColor DarkGray
+    Write-Host "  请输入来自 $Script:API_BASE_URL 的 MAX API Key" -ForegroundColor White
+    Write-Host "  输入内容不会显示，这是正常现象。" -ForegroundColor DarkGray
     Write-Host ""
 
     while ($true) {
@@ -1028,12 +1038,12 @@ function Read-ApiKey {
         }
 
         if ([string]::IsNullOrWhiteSpace($apiKey)) {
-            Write-Warn "API key cannot be empty."
+            Write-Warn "API Key 不能为空。"
             continue
         }
 
         if ($apiKey.Length -lt 8) {
-            Write-Warn "API key looks too short. Please double-check it."
+            Write-Warn "API Key 看起来过短，请检查后重新输入。"
             continue
         }
 
@@ -1042,14 +1052,14 @@ function Read-ApiKey {
 }
 
 function Install-GitIfNeeded {
-    Write-Step "Check Git"
+    Write-Step "检测 Git"
 
     if (Test-CommandExists "git") {
-        Write-Success "Git is already installed: $(git --version 2>$null)"
+        Write-Success "Git 已安装: $(git --version 2>$null)"
         return $true
     }
 
-    Write-Info "Git is required for Claude Code."
+    Write-Info "Claude Code 依赖 Git。"
     if (Test-WingetAvailable) {
         if (Install-WithWinget -PackageId "Git.Git" -FriendlyName "Git for Windows") {
             return $true
@@ -1057,51 +1067,51 @@ function Install-GitIfNeeded {
     }
 
     if (-not (Test-IsAdmin)) {
-        Write-Warn "Installing Git silently requires administrator privileges."
-        Write-Info "Please rerun PowerShell as administrator or install Git manually from https://git-scm.com/downloads/win"
+        Write-Warn "静默安装 Git 需要管理员权限。"
+        Write-Info "请以管理员身份重新运行 PowerShell，或手动从 https://git-scm.com/downloads/win 安装 Git。"
         return $false
     }
 
     $gitUrl = "https://github.com/git-for-windows/git/releases/download/$Script:GIT_RELEASE/Git-$Script:GIT_VERSION.2-64-bit.exe"
     $installerPath = Join-Path $env:TEMP "git-installer.exe"
     if (-not (Download-File -Url $gitUrl -OutFile $installerPath -UseProxy)) {
-        Write-Err "Git download failed."
+        Write-Err "Git 下载失败。"
         return $false
     }
 
-    Write-Info "Installing Git silently..."
+    Write-Info "正在静默安装 Git ..."
     $process = Start-Process -FilePath $installerPath -ArgumentList "/VERYSILENT", "/NORESTART", "/NOCANCEL", "/SP-" -Wait -PassThru
     Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
 
     if ($process.ExitCode -ne 0) {
-        Write-Err "Git installer exited with code $($process.ExitCode)."
+        Write-Err "Git 安装程序退出，返回码: $($process.ExitCode)。"
         return $false
     }
 
     Refresh-PathEnv
     if (Test-CommandExists "git") {
-        Write-Success "Git installed successfully."
+        Write-Success "Git 安装成功。"
         return $true
     }
 
-    Write-Err "Git still was not found after installation."
+    Write-Err "Git 安装后仍未检测到命令。"
     return $false
 }
 
 function Install-NodeIfNeeded {
-    Write-Step "Check Node.js"
+    Write-Step "检测 Node.js"
 
     $major = Get-NodeMajorVersion
     if ($major -ge 20) {
-        Write-Success "Node.js is already installed: $(node --version) (meets >=20 requirement)"
+        Write-Success "Node.js 已安装: $(node --version)（满足 >=20 要求）"
         return $true
     }
 
     $isUpgrade = $major -gt 0
     if ($isUpgrade) {
-        Write-Warn "Node.js is too old: $(node --version). Node.js 20+ is required."
+        Write-Warn "Node.js 版本过低: $(node --version)。需要 Node.js 20 及以上版本。"
     } else {
-        Write-Info "Node.js is not installed."
+        Write-Info "未检测到 Node.js。"
     }
 
     if (Test-WingetAvailable) {
@@ -1119,42 +1129,42 @@ function Install-NodeIfNeeded {
     }
 
     if (-not (Test-IsAdmin)) {
-        Write-Err "Installing Node.js via MSI requires administrator privileges."
+        Write-Err "通过 MSI 安装 Node.js 需要管理员权限。"
         return $false
     }
 
     $nodeUrl = "$Script:NODE_MIRROR/$Script:NODE_VERSION/node-$Script:NODE_VERSION-x64.msi"
     $msiPath = Join-Path $env:TEMP "node-installer.msi"
     if (-not (Download-File -Url $nodeUrl -OutFile $msiPath)) {
-        Write-Err "Node.js download failed."
+        Write-Err "Node.js 下载失败。"
         return $false
     }
 
-    Write-Info "Installing Node.js silently..."
+    Write-Info "正在静默安装 Node.js ..."
     $process = Start-Process -FilePath "msiexec.exe" -ArgumentList "/i", "`"$msiPath`"", "/qn", "/norestart" -Wait -PassThru
     Remove-Item $msiPath -Force -ErrorAction SilentlyContinue
 
     if ($process.ExitCode -ne 0) {
-        Write-Err "Node.js installer exited with code $($process.ExitCode)."
+        Write-Err "Node.js 安装程序退出，返回码: $($process.ExitCode)。"
         return $false
     }
 
     Refresh-PathEnv
     if ((Get-NodeMajorVersion) -ge 20) {
-        Write-Success "Node.js installed successfully."
+        Write-Success "Node.js 安装成功。"
         return $true
     }
 
-    Write-Err "Node.js still does not meet the version requirement after installation."
+    Write-Err "Node.js 安装后仍未达到版本要求。"
     return $false
 }
 
 function Set-NpmMirror {
-    Write-Step "Configure npm registry mirror"
+    Write-Step "配置 npm 国内镜像"
 
     Resolve-NpmPath
     if (-not $Script:NpmExe) {
-        Write-Err "npm was not found. Skipping registry configuration."
+        Write-Err "未检测到 npm，跳过镜像配置。"
         $env:npm_config_registry = $Script:NPM_MIRROR
         return
     }
@@ -1171,10 +1181,10 @@ function Set-NpmMirror {
     $expected = $Script:NPM_MIRROR.TrimEnd('/')
 
     if ($current -eq $expected) {
-        Write-Success "npm registry is set to $Script:NPM_MIRROR"
+        Write-Success "npm 镜像已设置为 $Script:NPM_MIRROR"
     } else {
         $env:npm_config_registry = $Script:NPM_MIRROR
-        Write-Warn "npm registry could not be persisted cleanly. The current process will still use $Script:NPM_MIRROR"
+        Write-Warn "npm 镜像未能成功持久化，当前进程仍会使用 $Script:NPM_MIRROR"
     }
 }
 
@@ -1237,15 +1247,15 @@ function Test-ToolVersionCommand {
             Success = $false
             Version = $null
             Details = $details
-            Message = "$DisplayName command was not found."
+            Message = "未找到 $DisplayName 命令。"
         }
     }
 
     if ($details.ExitCode -ne 0) {
         $snippet = Format-OutputSnippet -Text $details.OutputText
-        $message = "$DisplayName did not start successfully."
+        $message = "$DisplayName 启动失败。"
         if ($snippet) {
-            $message += " Output: $snippet"
+            $message += " 输出: $snippet"
         }
 
         return [PSCustomObject]@{
@@ -1261,7 +1271,7 @@ function Test-ToolVersionCommand {
             Success = $false
             Version = $null
             Details = $details
-            Message = "$DisplayName returned no version output."
+            Message = "$DisplayName 没有返回版本信息。"
         }
     }
 
@@ -1281,22 +1291,22 @@ function Get-NpmFailureMessage {
     )
 
     if (Test-NpmLockFailure -NpmResult $NpmResult) {
-        $message = "$DisplayName update failed because one or more installed files are in use. Close any running $DisplayName sessions and retry."
+        $message = "$DisplayName 更新失败，原因是一个或多个已安装文件正在被占用。请关闭所有正在运行的 $DisplayName 会话后重试。"
         $processSummary = Format-ProcessSummary -Processes $ActiveProcesses
         if ($processSummary) {
-            $message += " Detected processes: $processSummary."
+            $message += " 检测到的进程: $processSummary。"
         }
         return $message
     }
 
     $snippet = Format-OutputSnippet -Text (($NpmResult.Output | ForEach-Object { "$_" }) -join "`n")
-    $message = "$DisplayName npm install failed"
+    $message = "$DisplayName 的 npm 安装失败"
     if ($null -ne $NpmResult.ExitCode) {
-        $message += " (exit code $($NpmResult.ExitCode))"
+        $message += "（退出码 $($NpmResult.ExitCode)）"
     }
-    $message += "."
+    $message += "。"
     if ($snippet) {
-        $message += " Output: $snippet"
+        $message += " 输出: $snippet"
     }
 
     return $message
@@ -1341,7 +1351,7 @@ function Test-ClaudeRuntime {
             Version          = $versionCheck.Version
             BinaryState      = $binaryState
             NeedsOfficialFix = $true
-            Message          = "Claude Code native launcher was not written to disk."
+            Message          = "Claude Code 的原生启动器未能写入磁盘。"
         }
     }
 
@@ -1351,7 +1361,7 @@ function Test-ClaudeRuntime {
             Version          = $versionCheck.Version
             BinaryState      = $binaryState
             NeedsOfficialFix = $true
-            Message          = "Claude Code still has only the stub launcher; the native Windows binary is missing."
+            Message          = "Claude Code 当前仍只有 stub 启动器，缺少原生 Windows 二进制文件。"
         }
     }
 
@@ -1399,11 +1409,113 @@ function Get-MissingGeminiMcpCommands {
         if ([string]::IsNullOrWhiteSpace($commandName)) { continue }
 
         if (-not (Get-Command $commandName -ErrorAction SilentlyContinue)) {
-            [void]$missing.Add("Gemini MCP server '$serverName' command was not found: $commandName")
+            [void]$missing.Add("Gemini MCP 服务 '$serverName' 的命令不存在: $commandName")
         }
     }
 
     return @($missing)
+}
+
+function Ensure-GeminiNode20Runtime {
+    $runtimeDir = Join-Path $env:USERPROFILE ".gemini\node20-runtime"
+    $nodePath = Join-Path $runtimeDir "node_modules\node\bin\node.exe"
+
+    if (Test-Path $nodePath) {
+        return [PSCustomObject]@{
+            Success   = $true
+            NodePath  = $nodePath
+            Installed = $false
+            Message   = $null
+        }
+    }
+
+    Ensure-Directory $runtimeDir
+    Write-Info "检测到当前 Windows 环境使用 Node.js 24+，正在为 Gemini CLI 准备专用 Node.js 20 运行时 ..."
+    $npmResult = Invoke-NpmCommand -Arguments @("install", "--prefix", $runtimeDir, "node@20", "--no-save")
+    if ($npmResult.ExitCode -ne 0) {
+        $snippet = Format-OutputSnippet -Text (($npmResult.Output | ForEach-Object { "$_" }) -join "`n")
+        $message = "为 Gemini CLI 安装专用 Node.js 20 运行时失败。"
+        if ($snippet) {
+            $message += " 输出: $snippet"
+        }
+
+        return [PSCustomObject]@{
+            Success   = $false
+            NodePath  = $null
+            Installed = $false
+            Message   = $message
+        }
+    }
+
+    if (-not (Test-Path $nodePath)) {
+        return [PSCustomObject]@{
+            Success   = $false
+            NodePath  = $null
+            Installed = $false
+            Message   = "专用 Node.js 20 运行时安装完成，但未找到 node.exe。"
+        }
+    }
+
+    return [PSCustomObject]@{
+        Success   = $true
+        NodePath  = $nodePath
+        Installed = $true
+        Message   = $null
+    }
+}
+
+function Install-GeminiCmdWrapper {
+    param([string]$NodePath)
+
+    $cmdShim = Get-Command "gemini.cmd" -ErrorAction SilentlyContinue
+    if (-not $cmdShim) {
+        return [PSCustomObject]@{
+            Success = $false
+            Message = "未找到 gemini.cmd，无法安装 Gemini 启动包装器。"
+        }
+    }
+
+    $cmdPath = $cmdShim.Source
+    $shimDir = Split-Path -Path $cmdPath -Parent
+    $geminiJsPath = Join-Path $shimDir "node_modules\@google\gemini-cli\bundle\gemini.js"
+    $backupPath = "$cmdPath.maxapi-original"
+
+    if (-not (Test-Path $geminiJsPath)) {
+        return [PSCustomObject]@{
+            Success = $false
+            Message = "未找到 Gemini CLI 主脚本，无法安装 Gemini 启动包装器。"
+        }
+    }
+
+    try {
+        if (-not (Test-Path $backupPath)) {
+            Copy-Item -Path $cmdPath -Destination $backupPath -Force
+        }
+
+        $wrapper = @"
+@echo off
+setlocal
+set "MAXAPI_GEMINI_NODE20=$NodePath"
+set "MAXAPI_GEMINI_JS=$geminiJsPath"
+if exist "%MAXAPI_GEMINI_NODE20%" if exist "%MAXAPI_GEMINI_JS%" (
+  "%MAXAPI_GEMINI_NODE20%" "%MAXAPI_GEMINI_JS%" %*
+  exit /b %ERRORLEVEL%
+)
+node "%MAXAPI_GEMINI_JS%" %*
+exit /b %ERRORLEVEL%
+"@
+
+        Write-TextUtf8NoBom -Path $cmdPath -Content $wrapper
+        return [PSCustomObject]@{
+            Success = $true
+            Message = $null
+        }
+    } catch {
+        return [PSCustomObject]@{
+            Success = $false
+            Message = "写入 Gemini 启动包装器失败: $($_.Exception.Message)"
+        }
+    }
 }
 
 function Install-ClaudeCode {
@@ -1412,15 +1524,15 @@ function Install-ClaudeCode {
     $result = New-ToolResult -Command "claude"
     $displayName = "Claude Code"
 
-    Write-Step "Install Claude Code"
+    Write-Step "安装 Claude Code"
 
     $currentCheck = Test-ToolVersionCommand -Command "claude" -DisplayName $displayName
     $isUpdate = Test-ToolExists "claude"
     if ($currentCheck.Success) {
         $result.version_before = $currentCheck.Version
-        Write-Info "$displayName is already installed: $($currentCheck.Version). The installer will update it."
+        Write-Info "$displayName 已安装: $($currentCheck.Version)，将更新到最新版本。"
     } elseif ($isUpdate) {
-        Write-Warn "$displayName was found but is not currently healthy. Reinstalling it."
+        Write-Warn "检测到 $displayName，但当前状态异常，正在重新安装。"
     }
 
     $packageDir = Get-GlobalNpmPackageDirectory -Command "claude" -PackageRelativePath "@anthropic-ai\claude-code"
@@ -1428,11 +1540,11 @@ function Install-ClaudeCode {
     if ($isUpdate -and $packageDir) {
         $activeProcesses = Get-ProcessesUsingPathPrefix -PathPrefix $packageDir
         if ($activeProcesses.Count -gt 0) {
-            Add-ToolWarning -Result $result -Message "Detected running Claude Code processes from the global npm install: $(Format-ProcessSummary -Processes $activeProcesses). The update may fail until they are closed."
+            Add-ToolWarning -Result $result -Message "检测到全局 npm 安装目录中仍有 Claude Code 进程在运行: $(Format-ProcessSummary -Processes $activeProcesses)。请先关闭它们，否则更新可能失败。"
         }
     }
 
-    Write-Info "Installing Claude Code via npm..."
+    Write-Info "正在通过 npm 安装 Claude Code ..."
     $npmResult = Invoke-NpmCommand -Arguments @("install", "-g", "@anthropic-ai/claude-code")
     if ($npmResult.ExitCode -ne 0) {
         Set-ToolFailure -Result $result -Message (Get-NpmFailureMessage -DisplayName $displayName -NpmResult $npmResult -ActiveProcesses $activeProcesses)
@@ -1445,7 +1557,7 @@ function Install-ClaudeCode {
 
     $runtimeCheck = Test-ClaudeRuntime
     if ($runtimeCheck.NeedsOfficialFix) {
-        Add-ToolWarning -Result $result -Message "Claude Code native binary was not materialized from the mirror install. Retrying once against the official npm registry."
+        Add-ToolWarning -Result $result -Message "镜像源安装后未正确生成 Claude Code 原生二进制文件，正在切换到官方 npm 源重试一次。"
         $retry = Invoke-NpmCommand -Arguments @("install", "-g", "@anthropic-ai/claude-code", "--registry=https://registry.npmjs.org")
         if ($retry.ExitCode -ne 0) {
             Set-ToolFailure -Result $result -Message (Get-NpmFailureMessage -DisplayName $displayName -NpmResult $retry -ActiveProcesses @())
@@ -1466,18 +1578,18 @@ function Install-ClaudeCode {
     $result.version_after = $runtimeCheck.Version
 
     if ($result.version_before) {
-        Write-Success "$displayName updated: $($result.version_before) -> $($result.version_after)"
+        Write-Success "$displayName 已更新: $($result.version_before) -> $($result.version_after)"
     } else {
-        Write-Success "$displayName installed: $($result.version_after)"
+        Write-Success "$displayName 安装完成: $($result.version_after)"
     }
 
-    Write-Info "Writing Claude Code configuration..."
+    Write-Info "正在写入 Claude Code 配置 ..."
     try {
         $claudeDir = Join-Path $env:USERPROFILE ".claude"
         Ensure-Directory $claudeDir
 
         $configPath = Join-Path $claudeDir "settings.json"
-        $claudeSettings = Read-JsonConfigOrDefault -Path $configPath -Label "Claude Code settings.json"
+        $claudeSettings = Read-JsonConfigOrDefault -Path $configPath -Label "Claude Code 配置文件"
         $claudeEnv = if ($claudeSettings.PSObject.Properties["env"] -and $claudeSettings.env) {
             $claudeSettings.env
         } else {
@@ -1490,7 +1602,7 @@ function Install-ClaudeCode {
         Ensure-ObjectProperty -Object $claudeEnv -Name "ANTHROPIC_AUTH_TOKEN" -Value $ApiKey
         Ensure-ObjectProperty -Object $claudeSettings -Name "env" -Value $claudeEnv
 
-        Write-JsonConfigFile -Path $configPath -Object $claudeSettings -Title "Claude Code config"
+        Write-JsonConfigFile -Path $configPath -Object $claudeSettings -Title "Claude Code 配置文件"
 
         Remove-PersistentEnvVarIfMatches -Name "ANTHROPIC_MODEL" -ExpectedValue $Script:CLAUDE_MODEL
         Remove-PersistentEnvVarIfMatches -Name "ANTHROPIC_API_KEY" -ExpectedValue $ApiKey
@@ -1499,7 +1611,7 @@ function Install-ClaudeCode {
 
         $result.configured = $true
     } catch {
-        Set-ToolFailure -Result $result -Message "Claude Code installed, but writing config failed: $($_.Exception.Message)"
+        Set-ToolFailure -Result $result -Message "Claude Code 已安装，但写入配置失败: $($_.Exception.Message)"
     }
 
     return (Complete-ToolResult -Result $result)
@@ -1511,15 +1623,15 @@ function Install-CodexCli {
     $result = New-ToolResult -Command "codex"
     $displayName = "Codex CLI"
 
-    Write-Step "Install Codex CLI"
+    Write-Step "安装 Codex CLI"
 
     $currentCheck = Test-ToolVersionCommand -Command "codex" -DisplayName $displayName
     $isUpdate = Test-ToolExists "codex"
     if ($currentCheck.Success) {
         $result.version_before = $currentCheck.Version
-        Write-Info "$displayName is already installed: $($currentCheck.Version). The installer will update it."
+        Write-Info "$displayName 已安装: $($currentCheck.Version)，将更新到最新版本。"
     } elseif ($isUpdate) {
-        Write-Warn "$displayName was found but is not currently healthy. Reinstalling it."
+        Write-Warn "检测到 $displayName，但当前状态异常，正在重新安装。"
     }
 
     $packageDir = Get-GlobalNpmPackageDirectory -Command "codex" -PackageRelativePath "@openai\codex"
@@ -1527,11 +1639,11 @@ function Install-CodexCli {
     if ($isUpdate -and $packageDir) {
         $activeProcesses = Get-ProcessesUsingPathPrefix -PathPrefix $packageDir
         if ($activeProcesses.Count -gt 0) {
-            Add-ToolWarning -Result $result -Message "Detected running Codex CLI processes from the global npm install: $(Format-ProcessSummary -Processes $activeProcesses). The update may fail until they are closed."
+            Add-ToolWarning -Result $result -Message "检测到全局 npm 安装目录中仍有 Codex CLI 进程在运行: $(Format-ProcessSummary -Processes $activeProcesses)。请先关闭它们，否则更新可能失败。"
         }
     }
 
-    Write-Info "Installing Codex CLI via npm..."
+    Write-Info "正在通过 npm 安装 Codex CLI ..."
     $npmResult = Invoke-NpmCommand -Arguments @("install", "-g", "@openai/codex")
     if ($npmResult.ExitCode -ne 0) {
         Set-ToolFailure -Result $result -Message (Get-NpmFailureMessage -DisplayName $displayName -NpmResult $npmResult -ActiveProcesses $activeProcesses)
@@ -1552,12 +1664,12 @@ function Install-CodexCli {
     $result.version_after = $runtimeCheck.Version
 
     if ($result.version_before) {
-        Write-Success "$displayName updated: $($result.version_before) -> $($result.version_after)"
+        Write-Success "$displayName 已更新: $($result.version_before) -> $($result.version_after)"
     } else {
-        Write-Success "$displayName installed: $($result.version_after)"
+        Write-Success "$displayName 安装完成: $($result.version_after)"
     }
 
-    Write-Info "Writing Codex CLI configuration..."
+    Write-Info "正在写入 Codex CLI 配置 ..."
     try {
         $codexDir = Join-Path $env:USERPROFILE ".codex"
         Ensure-Directory $codexDir
@@ -1575,13 +1687,13 @@ function Install-CodexCli {
 
         Backup-FileIfExists -Path $configPath | Out-Null
         Write-TextUtf8NoBom -Path $configPath -Content $codexConfig.Content
-        Write-Success "Wrote Codex CLI config: $configPath"
-        Show-FilePreview -Path $configPath -Title "Codex CLI config"
+        Write-Success "已写入 Codex CLI 配置: $configPath"
+        Show-FilePreview -Path $configPath -Title "Codex CLI 配置文件"
 
         Remove-PersistentEnvVarIfMatches -Name "OPENAI_API_KEY" -ExpectedValue $ApiKey
         $result.configured = $true
     } catch {
-        Set-ToolFailure -Result $result -Message "Codex CLI installed, but writing config failed: $($_.Exception.Message)"
+        Set-ToolFailure -Result $result -Message "Codex CLI 已安装，但写入配置失败: $($_.Exception.Message)"
     }
 
     return (Complete-ToolResult -Result $result)
@@ -1593,18 +1705,18 @@ function Install-GeminiCli {
     $result = New-ToolResult -Command "gemini"
     $displayName = "Gemini CLI"
 
-    Write-Step "Install Gemini CLI"
+    Write-Step "安装 Gemini CLI"
 
     $currentCheck = Test-ToolVersionCommand -Command "gemini" -DisplayName $displayName
     $isUpdate = Test-ToolExists "gemini"
     if ($currentCheck.Success) {
         $result.version_before = $currentCheck.Version
-        Write-Info "$displayName is already installed: $($currentCheck.Version). The installer will update it."
+        Write-Info "$displayName 已安装: $($currentCheck.Version)，将更新到最新版本。"
     } elseif ($isUpdate) {
-        Write-Warn "$displayName was found but is not currently healthy. Reinstalling it."
+        Write-Warn "检测到 $displayName，但当前状态异常，正在重新安装。"
     }
 
-    Write-Info "Installing Gemini CLI via npm..."
+    Write-Info "正在通过 npm 安装 Gemini CLI ..."
     $npmResult = Invoke-NpmCommand -Arguments @("install", "-g", "@google/gemini-cli")
     if ($npmResult.ExitCode -ne 0) {
         Set-ToolFailure -Result $result -Message (Get-NpmFailureMessage -DisplayName $displayName -NpmResult $npmResult -ActiveProcesses @())
@@ -1625,21 +1737,21 @@ function Install-GeminiCli {
     $result.version_after = $runtimeCheck.Version
 
     if ($result.version_before) {
-        Write-Success "$displayName updated: $($result.version_before) -> $($result.version_after)"
+        Write-Success "$displayName 已更新: $($result.version_before) -> $($result.version_after)"
     } else {
-        Write-Success "$displayName installed: $($result.version_after)"
+        Write-Success "$displayName 安装完成: $($result.version_after)"
     }
 
-    Write-Warn "Gemini CLI still requires GEMINI_API_KEY in the user environment."
-    Write-Warn "This installer does not write GOOGLE_GEMINI_BASE_URL because current Gemini CLI releases do not expose an official custom base URL setting."
+    Write-Warn "Gemini CLI 仍要求在用户环境变量中保留 GEMINI_API_KEY。"
+    Write-Info "当前版本 Gemini CLI 已支持通过 GOOGLE_GEMINI_BASE_URL 指向 MAX API。"
 
-    Write-Info "Writing Gemini CLI configuration..."
+    Write-Info "正在写入 Gemini CLI 配置 ..."
     try {
         $geminiDir = Join-Path $env:USERPROFILE ".gemini"
         Ensure-Directory $geminiDir
 
         $settingsPath = Join-Path $geminiDir "settings.json"
-        $geminiSettings = Read-JsonConfigOrDefault -Path $settingsPath -Label "Gemini CLI settings.json"
+        $geminiSettings = Read-JsonConfigOrDefault -Path $settingsPath -Label "Gemini CLI 配置文件"
 
         $modelSettings = if ($geminiSettings.PSObject.Properties["model"] -and $geminiSettings.model) {
             $geminiSettings.model
@@ -1664,20 +1776,40 @@ function Install-GeminiCli {
         Ensure-ObjectProperty -Object $securitySettings -Name "auth" -Value $authSettings
         Ensure-ObjectProperty -Object $geminiSettings -Name "security" -Value $securitySettings
 
-        Write-JsonConfigFile -Path $settingsPath -Object $geminiSettings -Title "Gemini CLI config"
+        Write-JsonConfigFile -Path $settingsPath -Object $geminiSettings -Title "Gemini CLI 配置文件"
 
-        Remove-PersistentEnvVarIfMatches -Name "GOOGLE_GEMINI_BASE_URL" -ExpectedValue $Script:API_BASE_URL
         Remove-PersistentEnvVarIfMatches -Name "GEMINI_MODEL" -ExpectedValue $Script:GEMINI_MODEL
         Set-PersistentEnvVar -Name "GEMINI_API_KEY" -Value $ApiKey
-        Show-EnvPreview -Title "Gemini required environment variables" -Entries @{ GEMINI_API_KEY = $ApiKey }
+        Set-PersistentEnvVar -Name "GOOGLE_GEMINI_BASE_URL" -Value $Script:API_BASE_URL
+        Show-EnvPreview -Title "Gemini 必需环境变量" -Entries @{
+            GEMINI_API_KEY          = $ApiKey
+            GOOGLE_GEMINI_BASE_URL  = $Script:API_BASE_URL
+        }
 
         foreach ($warning in (Get-MissingGeminiMcpCommands -Settings $geminiSettings)) {
             Add-ToolWarning -Result $result -Message $warning
         }
 
+        $nodeMajor = Get-NodeMajorVersion
+        if ($nodeMajor -ge 24) {
+            $nodeRuntime = Ensure-GeminiNode20Runtime
+            if (-not $nodeRuntime.Success) {
+                Add-ToolWarning -Result $result -Message $nodeRuntime.Message
+                Add-ToolWarning -Result $result -Message "当前系统 Node.js $(node --version 2>$null) 仍可能导致 Gemini CLI 在退出时触发断言错误。"
+            } else {
+                $wrapperInstall = Install-GeminiCmdWrapper -NodePath $nodeRuntime.NodePath
+                if (-not $wrapperInstall.Success) {
+                    Add-ToolWarning -Result $result -Message $wrapperInstall.Message
+                    Add-ToolWarning -Result $result -Message "当前系统 Node.js $(node --version 2>$null) 仍可能导致 Gemini CLI 在退出时触发断言错误。"
+                } else {
+                    Write-Info "已为 Gemini CLI 配置专用 Node.js 20 启动器，用于规避 Windows + Node.js 24 的退出断言问题。"
+                }
+            }
+        }
+
         $result.configured = $true
     } catch {
-        Set-ToolFailure -Result $result -Message "Gemini CLI installed, but writing config failed: $($_.Exception.Message)"
+        Set-ToolFailure -Result $result -Message "Gemini CLI 已安装，但写入配置失败: $($_.Exception.Message)"
     }
 
     return (Complete-ToolResult -Result $result)
@@ -1691,7 +1823,7 @@ function Show-Summary {
 
     Write-Host ""
     Write-Host ""
-    Write-Host "  Installation Summary" -ForegroundColor Magenta
+    Write-Host "  安装结果汇总" -ForegroundColor Magenta
     Write-Host ""
 
     foreach ($tool in $SelectedTools) {
@@ -1699,18 +1831,18 @@ function Show-Summary {
         $name = Get-ToolDisplayName -Tool $tool
 
         if ($null -eq $result) {
-            Write-Host "    $name : not run" -ForegroundColor Yellow
+            Write-Host "    $name : 未执行" -ForegroundColor Yellow
             continue
         }
 
         if ($result.success) {
-            $label = if ($result.warnings.Count -gt 0) { "success with warnings" } else { "success" }
+            $label = if ($result.warnings.Count -gt 0) { "成功（有警告）" } else { "成功" }
             $color = if ($result.warnings.Count -gt 0) { "Yellow" } else { "Green" }
         } elseif ($result.installed -or $result.runtime_validated -or $result.configured) {
-            $label = "partial"
+            $label = "部分成功"
             $color = "Yellow"
         } else {
-            $label = "failed"
+            $label = "失败"
             $color = "Red"
         }
 
@@ -1723,22 +1855,22 @@ function Show-Summary {
             } else {
                 $result.version_after
             }
-            Write-Host "      version: $versionText" -ForegroundColor DarkGray
+            Write-Host "      版本: $versionText" -ForegroundColor DarkGray
         }
 
         if (-not [string]::IsNullOrWhiteSpace($result.failure_reason)) {
-            Write-Host "      reason: $($result.failure_reason)" -ForegroundColor Red
+            Write-Host "      原因: $($result.failure_reason)" -ForegroundColor Red
         }
 
         foreach ($warning in $result.warnings) {
-            Write-Host "      warning: $warning" -ForegroundColor Yellow
+            Write-Host "      警告: $warning" -ForegroundColor Yellow
         }
     }
 
     $successfulTools = @($SelectedTools | Where-Object { $Results.ContainsKey($_) -and $Results[$_].success })
     if ($successfulTools.Count -gt 0) {
         Write-Host ""
-        Write-Host "  Usage:" -ForegroundColor Yellow
+        Write-Host "  使用方法:" -ForegroundColor Yellow
         Write-Host ""
         foreach ($tool in $successfulTools) {
             Write-Host "    $(Get-ToolDisplayName -Tool $tool):" -ForegroundColor White
@@ -1746,10 +1878,10 @@ function Show-Summary {
             Write-Host ""
         }
 
-        Write-Host "  MAX API service: $Script:API_BASE_URL" -ForegroundColor Magenta
+        Write-Host "  MAX API 服务: $Script:API_BASE_URL" -ForegroundColor Magenta
         Write-Host ""
-        Write-Host "  PowerShell .ps1 shims were disabled only for tools that fully passed install and runtime validation." -ForegroundColor Gray
-        Write-Host "  Reopen the terminal window if a command still is not found." -ForegroundColor Yellow
+        Write-Host "  已仅对安装与运行验证均成功的工具禁用 PowerShell .ps1 shim。" -ForegroundColor Gray
+        Write-Host "  如果命令仍未找到，请关闭并重新打开终端窗口。" -ForegroundColor Yellow
     }
 
     Write-Host ""
@@ -1776,24 +1908,24 @@ function Main {
     Write-Banner
 
     if (-not (Test-Environment)) {
-        Write-Err "Environment checks failed. Installation stopped."
+        Write-Err "环境检测失败，安装已终止。"
         return
     }
 
     $selectedTools = Show-ToolMenu
-    Write-Info "Selected tools: $($selectedTools -join ', ')"
+    Write-Info "已选择: $($selectedTools -join ', ')"
 
     $apiKey = Read-ApiKey
 
     if ($selectedTools -contains "claude") {
         if (-not (Install-GitIfNeeded)) {
-            Write-Warn "Git installation did not complete. Claude Code may remain limited until Git is available."
+            Write-Warn "Git 安装未完成。在 Git 可用前，Claude Code 的部分能力可能受限。"
         }
     }
 
     if (-not (Install-NodeIfNeeded)) {
-        Write-Err "Node.js installation failed, so the CLI tools cannot be installed."
-        Write-Info "Install Node.js 20+ manually and rerun this script."
+        Write-Err "Node.js 安装失败，无法继续安装这些 CLI 工具。"
+        Write-Info "请先手动安装 Node.js 20+，然后重新运行本脚本。"
         return
     }
 
@@ -1824,7 +1956,7 @@ function Main {
     Show-Summary -SelectedTools $selectedTools -Results $results
 
     Write-Host ""
-    Write-Host "  Installation finished." -ForegroundColor Green
+    Write-Host "  安装完成。" -ForegroundColor Green
     Write-Host ""
 }
 
