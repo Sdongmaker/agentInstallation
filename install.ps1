@@ -15,7 +15,7 @@ $Script:NODE_MIRROR    = "https://npmmirror.com/mirrors/node"
 $Script:NODE_VERSION   = "v20.18.1"
 $Script:GIT_VERSION    = "2.47.1"
 $Script:GIT_RELEASE    = "v2.47.1.windows.2"
-$Script:INSTALLER_VERSION = "v2.0"
+$Script:INSTALLER_VERSION = "v2.1"
 
 $Script:CLAUDE_MODEL = "claude-opus-4-6"
 $Script:CODEX_MODEL  = "gpt-5.4"
@@ -157,6 +157,100 @@ function Invoke-ToolCommandDetailed {
         ExitCode   = $exitCode
         Output     = $lines
         OutputText = (($lines -join "`n").Trim())
+    }
+}
+
+function Invoke-ToolCommandDetailedWithTimeout {
+    param(
+        [string]$Command,
+        [string[]]$Arguments,
+        [string]$WorkingDirectory,
+        [int]$TimeoutSeconds = 0
+    )
+
+    if ($TimeoutSeconds -le 0) {
+        $details = Invoke-ToolCommandDetailed -Command $Command -Arguments $Arguments
+        $details | Add-Member -NotePropertyName TimedOut -NotePropertyValue $false -Force
+        return $details
+    }
+
+    $cmd = Get-Command "$Command.cmd" -ErrorAction SilentlyContinue
+    if (-not $cmd) {
+        $cmd = Get-Command $Command -ErrorAction SilentlyContinue
+    }
+
+    if (-not $cmd) {
+        return [PSCustomObject]@{
+            Found      = $false
+            Path       = $null
+            ExitCode   = $null
+            Output     = @()
+            OutputText = $null
+            TimedOut   = $false
+        }
+    }
+
+    $job = Start-Job -ScriptBlock {
+        param(
+            [string]$CommandPath,
+            [string[]]$CommandArguments,
+            [string]$CommandWorkingDirectory
+        )
+
+        try {
+            if (-not [string]::IsNullOrWhiteSpace($CommandWorkingDirectory)) {
+                Set-Location -LiteralPath $CommandWorkingDirectory
+            }
+
+            $output = @(& $CommandPath @CommandArguments 2>&1)
+            return [PSCustomObject]@{
+                ExitCode = $LASTEXITCODE
+                Output   = @($output | ForEach-Object { "$_" })
+            }
+        } catch {
+            return [PSCustomObject]@{
+                ExitCode = 1
+                Output   = @("$($_.Exception.Message)")
+            }
+        }
+    } -ArgumentList $cmd.Source, $Arguments, $WorkingDirectory
+
+    $completed = Wait-Job -Job $job -Timeout $TimeoutSeconds
+    if (-not $completed) {
+        Stop-Job -Job $job -ErrorAction SilentlyContinue | Out-Null
+        Remove-Job -Job $job -Force -ErrorAction SilentlyContinue | Out-Null
+        return [PSCustomObject]@{
+            Found      = $true
+            Path       = $cmd.Source
+            ExitCode   = $null
+            Output     = @()
+            OutputText = $null
+            TimedOut   = $true
+        }
+    }
+
+    $jobResult = Receive-Job -Job $job -ErrorAction SilentlyContinue
+    Remove-Job -Job $job -Force -ErrorAction SilentlyContinue | Out-Null
+
+    $lines = @()
+    $exitCode = 1
+    if ($jobResult) {
+        $firstResult = @($jobResult)[0]
+        if ($firstResult.PSObject.Properties["Output"]) {
+            $lines = @($firstResult.Output | ForEach-Object { "$_" })
+        }
+        if ($firstResult.PSObject.Properties["ExitCode"]) {
+            $exitCode = $firstResult.ExitCode
+        }
+    }
+
+    return [PSCustomObject]@{
+        Found      = $true
+        Path       = $cmd.Source
+        ExitCode   = $exitCode
+        Output     = $lines
+        OutputText = (($lines -join "`n").Trim())
+        TimedOut   = $false
     }
 }
 
@@ -438,6 +532,9 @@ function New-ToolResult {
         runtime_validated = $false
         version_before    = $null
         version_after     = $null
+        smoke_tested      = $false
+        smoke_test_success = $false
+        smoke_test_output = $null
         warnings          = (New-Object System.Collections.ArrayList)
         failure_reason    = $null
     }
@@ -928,11 +1025,37 @@ function Remove-LegacyPowerShellWrapperProfiles {
 function Repair-PowerShellExecutionPolicy {
     Write-Step "修复 PowerShell 执行策略"
 
+    $currentUserBefore = $null
+    try {
+        $currentUserBefore = Get-ExecutionPolicy -Scope CurrentUser -ErrorAction Stop
+    } catch {}
+
+    $setError = $null
     try {
         Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned -Force -ErrorAction Stop
-        Write-Success "已将 CurrentUser 执行策略设置为 RemoteSigned。"
     } catch {
-        Write-Warn "设置 CurrentUser 执行策略失败: $($_.Exception.Message)"
+        $setError = $_.Exception.Message
+    }
+
+    $currentUserAfter = $null
+    try {
+        $currentUserAfter = Get-ExecutionPolicy -Scope CurrentUser -ErrorAction Stop
+    } catch {}
+
+    if ($currentUserAfter -eq "RemoteSigned") {
+        if ($currentUserBefore -eq "RemoteSigned") {
+            Write-Success "CurrentUser 执行策略已是 RemoteSigned，无需修改。"
+        } elseif ([string]::IsNullOrWhiteSpace($setError)) {
+            Write-Success "已将 CurrentUser 执行策略设置为 RemoteSigned。"
+        } else {
+            Write-Success "尽管 Set-ExecutionPolicy 返回错误，但 CurrentUser 当前已是 RemoteSigned。"
+        }
+    } elseif (-not [string]::IsNullOrWhiteSpace($setError)) {
+        Write-Warn "设置 CurrentUser 执行策略失败: $setError"
+    } elseif ([string]::IsNullOrWhiteSpace($currentUserAfter)) {
+        Write-Warn "已执行 Set-ExecutionPolicy，但无法确认 CurrentUser 执行策略的最终状态。"
+    } else {
+        Write-Warn "已执行 Set-ExecutionPolicy，但 CurrentUser 当前仍为 $currentUserAfter。"
     }
 
     try {
@@ -1186,6 +1309,8 @@ function Set-NpmMirror {
         $env:npm_config_registry = $Script:NPM_MIRROR
         Write-Warn "npm 镜像未能成功持久化，当前进程仍会使用 $Script:NPM_MIRROR"
     }
+
+    Write-Info "Codex CLI 与 Gemini CLI 默认使用国内镜像；Claude Code 为确保原生 Windows 二进制完整，会单独使用官方 npm 源安装。"
 }
 
 function Get-ToolDisplayName {
@@ -1544,8 +1669,9 @@ function Install-ClaudeCode {
         }
     }
 
-    Write-Info "正在通过 npm 安装 Claude Code ..."
-    $npmResult = Invoke-NpmCommand -Arguments @("install", "-g", "@anthropic-ai/claude-code")
+    Write-Info "Claude Code 依赖原生 optional dependency，为确保 Windows 二进制完整，将固定使用官方 npm 源安装。"
+    Write-Info "正在通过官方 npm 源安装 Claude Code ..."
+    $npmResult = Invoke-NpmCommand -Arguments @("install", "-g", "@anthropic-ai/claude-code", "--registry=https://registry.npmjs.org")
     if ($npmResult.ExitCode -ne 0) {
         Set-ToolFailure -Result $result -Message (Get-NpmFailureMessage -DisplayName $displayName -NpmResult $npmResult -ActiveProcesses $activeProcesses)
         return (Complete-ToolResult -Result $result)
@@ -1557,7 +1683,7 @@ function Install-ClaudeCode {
 
     $runtimeCheck = Test-ClaudeRuntime
     if ($runtimeCheck.NeedsOfficialFix) {
-        Add-ToolWarning -Result $result -Message "镜像源安装后未正确生成 Claude Code 原生二进制文件，正在切换到官方 npm 源重试一次。"
+        Add-ToolWarning -Result $result -Message "官方 npm 源安装后仍未正确生成 Claude Code 原生二进制文件，正在再重试一次。"
         $retry = Invoke-NpmCommand -Arguments @("install", "-g", "@anthropic-ai/claude-code", "--registry=https://registry.npmjs.org")
         if ($retry.ExitCode -ne 0) {
             Set-ToolFailure -Result $result -Message (Get-NpmFailureMessage -DisplayName $displayName -NpmResult $retry -ActiveProcesses @())
@@ -1815,6 +1941,190 @@ function Install-GeminiCli {
     return (Complete-ToolResult -Result $result)
 }
 
+function Get-ActualCallPrompt {
+    return "This is a post-install connectivity check. Do not use tools. What is 17 multiplied by 19? Reply with only the number."
+}
+
+function Get-ActualCallExpectedPattern {
+    return '\b323\b'
+}
+
+function Get-SmokeTestWorkspace {
+    param([string]$Tool)
+
+    $root = Join-Path $env:TEMP "maxapi-cli-smoke-tests"
+    Ensure-Directory $root
+
+    $workspace = Join-Path $root $Tool
+    Ensure-Directory $workspace
+
+    return $workspace
+}
+
+function Test-ToolActualCall {
+    param([string]$Tool)
+
+    $displayName = Get-ToolDisplayName -Tool $Tool
+    $workspace = Get-SmokeTestWorkspace -Tool $Tool
+    $prompt = Get-ActualCallPrompt
+    $expectedPattern = Get-ActualCallExpectedPattern
+    $outputPath = $null
+
+    switch ($Tool) {
+        "claude" {
+            $arguments = @(
+                "-p", $prompt,
+                "--output-format", "text",
+                "--permission-mode", "plan",
+                "--tools", "",
+                "--no-session-persistence"
+            )
+        }
+        "codex" {
+            $outputPath = Join-Path $workspace "codex-last-message.txt"
+            Remove-Item $outputPath -Force -ErrorAction SilentlyContinue
+            $arguments = @(
+                "exec",
+                "--skip-git-repo-check",
+                "--ephemeral",
+                "--color", "never",
+                "-o", $outputPath,
+                $prompt
+            )
+        }
+        "gemini" {
+            $arguments = @(
+                "-p", $prompt,
+                "--output-format", "text"
+            )
+        }
+        default {
+            return [PSCustomObject]@{
+                Success       = $false
+                Message       = "未定义 $displayName 的实际调用测试命令。"
+                OutputPreview = $null
+            }
+        }
+    }
+
+    $details = Invoke-ToolCommandDetailedWithTimeout -Command $Tool -Arguments $arguments -WorkingDirectory $workspace -TimeoutSeconds 120
+    $rawOutput = $details.OutputText
+
+    if ($outputPath -and (Test-Path $outputPath)) {
+        try {
+            $fileOutput = Read-TextUtf8 -Path $outputPath
+            if (-not [string]::IsNullOrWhiteSpace($fileOutput)) {
+                $rawOutput = $fileOutput.Trim()
+            }
+        } catch {}
+    }
+
+    $outputPreview = Format-OutputSnippet -Text $rawOutput
+
+    if (-not $details.Found) {
+        return [PSCustomObject]@{
+            Success       = $false
+            Message       = "未找到 $displayName 命令。"
+            OutputPreview = $null
+        }
+    }
+
+    if ($details.TimedOut) {
+        return [PSCustomObject]@{
+            Success       = $false
+            Message       = "$displayName 在 120 秒内未完成实际调用，可能仍在等待登录、权限确认或网络响应。"
+            OutputPreview = $outputPreview
+        }
+    }
+
+    if ($details.ExitCode -ne 0) {
+        $message = "$displayName 实际调用失败"
+        if ($null -ne $details.ExitCode) {
+            $message += "（退出码 $($details.ExitCode)）"
+        }
+        if ($outputPreview) {
+            $message += "。输出摘要: $outputPreview"
+        }
+
+        return [PSCustomObject]@{
+            Success       = $false
+            Message       = $message
+            OutputPreview = $outputPreview
+        }
+    }
+
+    if ([string]::IsNullOrWhiteSpace($rawOutput)) {
+        return [PSCustomObject]@{
+            Success       = $false
+            Message       = "$displayName 实际调用已结束，但没有返回可验证的内容。"
+            OutputPreview = $null
+        }
+    }
+
+    if ($rawOutput -notmatch $expectedPattern) {
+        $message = "$displayName 实际调用返回内容不符合预期，应包含 323。"
+        if ($outputPreview) {
+            $message += " 输出摘要: $outputPreview"
+        }
+
+        return [PSCustomObject]@{
+            Success       = $false
+            Message       = $message
+            OutputPreview = $outputPreview
+        }
+    }
+
+    return [PSCustomObject]@{
+        Success       = $true
+        Message       = "$displayName 实际调用成功。"
+        OutputPreview = $outputPreview
+    }
+}
+
+function Run-ActualCallTests {
+    param(
+        [string[]]$SelectedTools,
+        [hashtable]$Results
+    )
+
+    $testableTools = @($SelectedTools | Where-Object {
+        $Results.ContainsKey($_) -and
+        $Results[$_].success
+    })
+
+    if ($testableTools.Count -eq 0) {
+        Write-Info "没有可执行实际调用测试的工具。"
+        return
+    }
+
+    Write-Step "最终实际调用测试"
+    Write-Info "将对每个安装成功的工具发起一次极小的真实请求，以验证 API 连通性。"
+
+    foreach ($tool in $testableTools) {
+        $result = $Results[$tool]
+        $name = Get-ToolDisplayName -Tool $tool
+
+        Write-Info "正在验证 $name 的真实 API 调用 ..."
+        $testResult = Test-ToolActualCall -Tool $tool
+
+        $result.smoke_tested = $true
+        $result.smoke_test_success = $testResult.Success
+        $result.smoke_test_output = $testResult.OutputPreview
+
+        if ($testResult.Success) {
+            Write-Success $testResult.Message
+            if ($testResult.OutputPreview) {
+                Write-Info "返回摘要: $($testResult.OutputPreview)"
+            }
+            continue
+        }
+
+        $result.success = $false
+        $result.failure_reason = "实际调用测试失败: $($testResult.Message)"
+        Write-Err $result.failure_reason
+    }
+}
+
 function Show-Summary {
     param(
         [string[]]$SelectedTools,
@@ -1858,6 +2168,15 @@ function Show-Summary {
             Write-Host "      版本: $versionText" -ForegroundColor DarkGray
         }
 
+        if ($result.smoke_tested) {
+            $smokeLabel = if ($result.smoke_test_success) { "成功" } else { "失败" }
+            $smokeColor = if ($result.smoke_test_success) { "Green" } else { "Red" }
+            Write-Host "      实际调用: $smokeLabel" -ForegroundColor $smokeColor
+            if (-not [string]::IsNullOrWhiteSpace($result.smoke_test_output)) {
+                Write-Host "      返回摘要: $($result.smoke_test_output)" -ForegroundColor DarkGray
+            }
+        }
+
         if (-not [string]::IsNullOrWhiteSpace($result.failure_reason)) {
             Write-Host "      原因: $($result.failure_reason)" -ForegroundColor Red
         }
@@ -1880,7 +2199,9 @@ function Show-Summary {
 
         Write-Host "  MAX API 服务: $Script:API_BASE_URL" -ForegroundColor Magenta
         Write-Host ""
-        Write-Host "  已仅对安装与运行验证均成功的工具禁用 PowerShell .ps1 shim。" -ForegroundColor Gray
+        Write-Host "  已仅对完成安装与基础启动验证的工具禁用 PowerShell .ps1 shim。" -ForegroundColor Gray
+        Write-Host "  Claude Code 为确保原生 Windows 二进制完整，固定使用官方 npm 源安装。" -ForegroundColor Gray
+        Write-Host "  已对安装成功的工具执行一次真实 API 调用测试。" -ForegroundColor Gray
         Write-Host "  如果命令仍未找到，请关闭并重新打开终端窗口。" -ForegroundColor Yellow
     }
 
@@ -1952,6 +2273,7 @@ function Main {
     Disable-PowerShellShims -Commands $successfulCommands
     Remove-LegacyPowerShellWrapperProfiles
     Repair-PowerShellExecutionPolicy
+    Run-ActualCallTests -SelectedTools $selectedTools -Results $results
 
     Show-Summary -SelectedTools $selectedTools -Results $results
 
