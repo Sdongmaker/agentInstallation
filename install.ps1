@@ -1174,6 +1174,127 @@ function Read-ApiKey {
     }
 }
 
+function Test-MaxApiReachability {
+    param([string]$ApiKey)
+
+    Write-Step "检测 MAX API 服务"
+
+    $probeUri = "$Script:API_BASE_URL/v1/models"
+    $headers = @{
+        "Authorization" = "Bearer $ApiKey"
+        "Accept"        = "application/json"
+    }
+
+    Write-Info "正在测试 MAX API 可达性与认证状态 ..."
+    Write-Info "探测端点: $probeUri"
+
+    try {
+        $response = Invoke-WebRequest -Uri $probeUri -Headers $headers -Method Get -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
+        $statusCode = [int]$response.StatusCode
+        $modelCount = $null
+        $parsed = $null
+
+        if (-not [string]::IsNullOrWhiteSpace($response.Content)) {
+            try {
+                $parsed = $response.Content | ConvertFrom-Json -ErrorAction Stop
+            } catch {}
+        }
+
+        if ($parsed -and $parsed.PSObject.Properties["data"] -and $null -ne $parsed.data) {
+            try {
+                $modelCount = @($parsed.data).Count
+            } catch {}
+        }
+
+        Write-Success "MAX API 服务可达，认证通过。"
+        Write-Info "HTTP 状态: $statusCode"
+        if ($null -ne $modelCount) {
+            Write-Info "模型列表获取成功，共返回 $modelCount 个模型。"
+        }
+
+        return [PSCustomObject]@{
+            Success         = $true
+            Reachable       = $true
+            Authenticated   = $true
+            StatusCode      = $statusCode
+            Endpoint        = $probeUri
+            Message         = "MAX API 服务可达，认证通过。"
+            SkipSmokeTests  = $false
+        }
+    } catch {
+        $statusCode = $null
+        $statusDescription = $null
+        $failureMessage = $_.Exception.Message
+
+        if ($_.Exception.Response) {
+            try {
+                $statusCode = [int]$_.Exception.Response.StatusCode
+            } catch {}
+            try {
+                $statusDescription = [string]$_.Exception.Response.StatusDescription
+            } catch {}
+        }
+
+        if ($statusCode -eq 401 -or $statusCode -eq 403) {
+            $message = "MAX API 服务可达，但 API Key 未通过认证。"
+            if (-not [string]::IsNullOrWhiteSpace($statusDescription)) {
+                $message += " HTTP $statusCode $statusDescription。"
+            } else {
+                $message += " HTTP $statusCode。"
+            }
+
+            Write-Warn $message
+            Write-Warn "安装将继续，但会跳过最终真实调用测试。请检查 API Key 是否正确。"
+
+            return [PSCustomObject]@{
+                Success         = $false
+                Reachable       = $true
+                Authenticated   = $false
+                StatusCode      = $statusCode
+                Endpoint        = $probeUri
+                Message         = $message
+                SkipSmokeTests  = $true
+            }
+        }
+
+        if ($null -ne $statusCode) {
+            $message = "MAX API 已响应，但返回了异常状态。"
+            if (-not [string]::IsNullOrWhiteSpace($statusDescription)) {
+                $message += " HTTP $statusCode $statusDescription。"
+            } else {
+                $message += " HTTP $statusCode。"
+            }
+
+            Write-Warn $message
+            Write-Warn "安装将继续，但会跳过最终真实调用测试。"
+
+            return [PSCustomObject]@{
+                Success         = $false
+                Reachable       = $true
+                Authenticated   = $false
+                StatusCode      = $statusCode
+                Endpoint        = $probeUri
+                Message         = $message
+                SkipSmokeTests  = $true
+            }
+        }
+
+        $message = "无法连接 MAX API 服务: $failureMessage"
+        Write-Warn $message
+        Write-Warn "安装将继续，以便先完成 CLI 部署；最终真实调用测试将跳过。"
+
+        return [PSCustomObject]@{
+            Success         = $false
+            Reachable       = $false
+            Authenticated   = $false
+            StatusCode      = $null
+            Endpoint        = $probeUri
+            Message         = $message
+            SkipSmokeTests  = $true
+        }
+    }
+}
+
 function Install-GitIfNeeded {
     Write-Step "检测 Git"
 
@@ -2084,7 +2205,8 @@ function Test-ToolActualCall {
 function Run-ActualCallTests {
     param(
         [string[]]$SelectedTools,
-        [hashtable]$Results
+        [hashtable]$Results,
+        [object]$ApiPreflightResult
     )
 
     $testableTools = @($SelectedTools | Where-Object {
@@ -2098,6 +2220,15 @@ function Run-ActualCallTests {
     }
 
     Write-Step "最终实际调用测试"
+
+    if ($ApiPreflightResult -and $ApiPreflightResult.SkipSmokeTests) {
+        Write-Warn "由于安装前的 MAX API 服务预检查未通过，已跳过最终真实调用测试。"
+        foreach ($tool in $testableTools) {
+            Add-ToolWarning -Result $Results[$tool] -Message "已跳过实际调用测试：$($ApiPreflightResult.Message)"
+        }
+        return
+    }
+
     Write-Info "将对每个安装成功的工具发起一次极小的真实请求，以验证 API 连通性。"
 
     foreach ($tool in $testableTools) {
@@ -2128,13 +2259,26 @@ function Run-ActualCallTests {
 function Show-Summary {
     param(
         [string[]]$SelectedTools,
-        [hashtable]$Results
+        [hashtable]$Results,
+        [object]$ApiPreflightResult
     )
 
     Write-Host ""
     Write-Host ""
     Write-Host "  安装结果汇总" -ForegroundColor Magenta
     Write-Host ""
+
+    if ($ApiPreflightResult) {
+        $preflightLabel = if ($ApiPreflightResult.Success) { "成功" } else { "警告" }
+        $preflightColor = if ($ApiPreflightResult.Success) { "Green" } else { "Yellow" }
+        Write-Host "    MAX API 预检查 : " -NoNewline -ForegroundColor White
+        Write-Host $preflightLabel -ForegroundColor $preflightColor
+        Write-Host "      结果: $($ApiPreflightResult.Message)" -ForegroundColor DarkGray
+        if ($null -ne $ApiPreflightResult.StatusCode) {
+            Write-Host "      HTTP 状态: $($ApiPreflightResult.StatusCode)" -ForegroundColor DarkGray
+        }
+        Write-Host ""
+    }
 
     foreach ($tool in $SelectedTools) {
         $result = $Results[$tool]
@@ -2237,6 +2381,7 @@ function Main {
     Write-Info "已选择: $($selectedTools -join ', ')"
 
     $apiKey = Read-ApiKey
+    $apiPreflightResult = Test-MaxApiReachability -ApiKey $apiKey
 
     if ($selectedTools -contains "claude") {
         if (-not (Install-GitIfNeeded)) {
@@ -2273,9 +2418,9 @@ function Main {
     Disable-PowerShellShims -Commands $successfulCommands
     Remove-LegacyPowerShellWrapperProfiles
     Repair-PowerShellExecutionPolicy
-    Run-ActualCallTests -SelectedTools $selectedTools -Results $results
+    Run-ActualCallTests -SelectedTools $selectedTools -Results $results -ApiPreflightResult $apiPreflightResult
 
-    Show-Summary -SelectedTools $selectedTools -Results $results
+    Show-Summary -SelectedTools $selectedTools -Results $results -ApiPreflightResult $apiPreflightResult
 
     Write-Host ""
     Write-Host "  安装完成。" -ForegroundColor Green
