@@ -422,12 +422,28 @@ function Install-NodeIfNeeded {
 
 function Set-NpmMirror {
     Write-Step "配置 npm 国内镜像"
-    npm config set registry $Script:NPM_MIRROR 2>$null
-    $current = npm config get registry 2>$null
-    if ($current -like "*npmmirror*") {
+
+    # 尝试多种方式设置，确保兼容不同 npm 版本
+    # npm 9+ 推荐 --location=user
+    $setResult = npm config set registry $Script:NPM_MIRROR --location=user 2>&1
+    if ($LASTEXITCODE -ne 0) {
+        # 低版本 npm 不支持 --location 参数，回退
+        npm config set registry $Script:NPM_MIRROR 2>$null
+    }
+
+    # 验证设置（trim 输出，避免换行符干扰）
+    $current = (npm config get registry 2>$null)
+    if ($current) { $current = $current.Trim().TrimEnd('/') }
+    $expected = $Script:NPM_MIRROR.TrimEnd('/')
+
+    if ($current -eq $expected) {
         Write-Success "npm 镜像已设置: $Script:NPM_MIRROR"
     } else {
-        Write-Warn "npm 镜像设置可能未生效，当前: $current"
+        # 即使 config get 返回默认值，实际 install 可能已生效
+        # 设置环境变量作为双保险
+        $env:npm_config_registry = $Script:NPM_MIRROR
+        Write-Warn "npm config 设置可能未生效（当前: $current），已通过环境变量补偿"
+        Write-Info "后续 npm install 将使用镜像: $Script:NPM_MIRROR"
     }
 }
 
