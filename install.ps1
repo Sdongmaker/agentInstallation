@@ -585,10 +585,13 @@ function Install-ClaudeCode {
     [System.IO.File]::WriteAllText($configPath, $claudeConfig, $Script:UTF8NoBom)
     Write-Success "配置已写入: $configPath"
 
+    # 同时设置持久化环境变量（双保险，确保 Claude Code 能读到）
+    Set-PersistentEnvVar "ANTHROPIC_BASE_URL" $Script:API_BASE_URL
+    Set-PersistentEnvVar "ANTHROPIC_API_KEY" $ApiKey
+    Set-PersistentEnvVar "ANTHROPIC_MODEL" $Script:CLAUDE_MODEL
+
     return $true
 }
-
-function Install-CodexCli {
     param([string]$ApiKey)
 
     Write-Step "安装 Codex CLI"
