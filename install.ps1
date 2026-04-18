@@ -612,16 +612,55 @@ function Get-ToolShimDirectory {
     return (Split-Path -Path $cmdShim.Source -Parent)
 }
 
+function Get-GlobalNpmRootDirectory {
+    if (-not $Script:NpmExe) { Resolve-NpmPath }
+    if (-not $Script:NpmExe) { return $null }
+
+    try {
+        $output = @(& $Script:NpmExe "root" "-g" 2>$null)
+        if ($LASTEXITCODE -ne 0) {
+            return $null
+        }
+
+        $root = (($output | ForEach-Object { "$_" }) -join "`n").Trim()
+        if ([string]::IsNullOrWhiteSpace($root)) {
+            return $null
+        }
+
+        return $root
+    } catch {
+        return $null
+    }
+}
+
 function Get-GlobalNpmPackageDirectory {
     param(
         [string]$Command,
         [string]$PackageRelativePath
     )
 
-    $shimDir = Get-ToolShimDirectory -Command $Command
-    if ([string]::IsNullOrWhiteSpace($shimDir)) { return $null }
+    $candidates = New-Object System.Collections.ArrayList
+    $npmRoot = Get-GlobalNpmRootDirectory
+    if (-not [string]::IsNullOrWhiteSpace($npmRoot)) {
+        [void]$candidates.Add((Join-Path $npmRoot $PackageRelativePath))
+    }
 
-    return (Join-Path $shimDir ("node_modules\" + $PackageRelativePath))
+    $shimDir = Get-ToolShimDirectory -Command $Command
+    if (-not [string]::IsNullOrWhiteSpace($shimDir)) {
+        [void]$candidates.Add((Join-Path $shimDir ("node_modules\" + $PackageRelativePath)))
+    }
+
+    foreach ($candidate in $candidates) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    if ($candidates.Count -gt 0) {
+        return $candidates[0]
+    }
+
+    return $null
 }
 
 function Get-ProcessesUsingPathPrefix {
@@ -1588,12 +1627,16 @@ function Test-ClaudeRuntime {
     $versionCheck = Test-ToolVersionCommand -Command "claude" -DisplayName "Claude Code"
 
     if (-not $binaryState.Exists) {
+        $message = "Claude Code 的原生启动器未能写入磁盘。"
+        if ($versionCheck.Success) {
+            $message += " 当前 claude 命令可执行，但脚本未在全局 npm 包目录中找到 bin\\claude.exe，可能存在多个全局 npm 前缀或旧命令路径抢先命中。"
+        }
         return [PSCustomObject]@{
             Success          = $false
             Version          = $versionCheck.Version
             BinaryState      = $binaryState
             NeedsOfficialFix = $true
-            Message          = "Claude Code 的原生启动器未能写入磁盘。"
+            Message          = $message
         }
     }
 
@@ -2205,8 +2248,7 @@ function Run-ActualCallTests {
     )
 
     $testableTools = @($SelectedTools | Where-Object {
-        $Results.ContainsKey($_) -and
-        $Results[$_].success
+        $Results.ContainsKey($_)
     })
 
     if ($testableTools.Count -eq 0) {
@@ -2215,7 +2257,7 @@ function Run-ActualCallTests {
     }
 
     Write-Step "最终实际调用测试"
-    Write-Info "将对每个安装成功的工具发起一次极小的真实请求，以验证 API 连通性。"
+    Write-Info "将对每个已选择的工具发起一次极小的真实请求，以验证 API 连通性。"
 
     foreach ($tool in $testableTools) {
         $result = $Results[$tool]
@@ -2233,12 +2275,19 @@ function Run-ActualCallTests {
             if ($testResult.OutputPreview) {
                 Write-Info "返回摘要: $($testResult.OutputPreview)"
             }
+            if (-not $result.success) {
+                Add-ToolWarning -Result $result -Message "尽管安装阶段存在问题，$name 的实际调用仍成功。"
+            }
             continue
         }
 
-        $result.success = $false
-        $result.failure_reason = "实际调用测试失败: $($testResult.Message)"
-        Write-Err $result.failure_reason
+        if ($result.success) {
+            $result.success = $false
+            $result.failure_reason = "实际调用测试失败: $($testResult.Message)"
+            Write-Err $result.failure_reason
+        } else {
+            Add-ToolWarning -Result $result -Message "实际调用测试失败: $($testResult.Message)"
+        }
     }
 }
 
@@ -2328,7 +2377,7 @@ function Show-Summary {
         Write-Host ""
         Write-Host "  已仅对完成安装与基础启动验证的工具禁用 PowerShell .ps1 shim。" -ForegroundColor Gray
         Write-Host "  Claude Code 为确保原生 Windows 二进制完整，固定使用官方 npm 源安装。" -ForegroundColor Gray
-        Write-Host "  已对安装成功的工具执行一次真实 API 调用测试。" -ForegroundColor Gray
+        Write-Host "  已对所有已选择的工具执行一次真实 API 调用测试。" -ForegroundColor Gray
         Write-Host "  如果命令仍未找到，请关闭并重新打开终端窗口。" -ForegroundColor Yellow
     }
 

@@ -12,6 +12,12 @@ MAX API 一键安装 **Claude Code**、**Codex CLI**、**Gemini CLI** 三大 AI 
 irm https://kk.eemby.de/https://raw.githubusercontent.com/Sdongmaker/agentInstallation/main/install.ps1 | iex
 ```
 
+如果默认加速入口访问不稳定，可改用这个备选加速：
+
+```powershell
+irm https://hk.gh-proxy.org/https://raw.githubusercontent.com/Sdongmaker/agentInstallation/main/install.ps1 | iex
+```
+
 > **如何打开 PowerShell？** 右键点击 Windows 开始菜单 → 选择「Windows PowerShell」或「终端」
 
 ## 支持的工具
@@ -133,7 +139,7 @@ npm config set registry https://registry.npmmirror.com
 - Base URL 配置生效
 - CLI 真的能发请求并拿到返回
 
-所以脚本会对每个安装成功的工具发起一次极小的真实请求，验证连通性。当前测试题是一个极小的数学题，只会产生很少的 token 消耗。
+所以脚本会对每个已选择的工具都发起一次极小的真实请求，验证连通性。即使安装阶段报错，也会继续尝试真实调用，帮助区分“安装链路异常”和“工具实际上已经可用”。当前测试题是一个极小的数学题，只会产生很少的 token 消耗。
 
 ### 想更换 MAX API Key 或模型
 
