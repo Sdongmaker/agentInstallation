@@ -592,6 +592,8 @@ function Install-ClaudeCode {
 
     return $true
 }
+
+function Install-CodexCli {
     param([string]$ApiKey)
 
     Write-Step "安装 Codex CLI"
