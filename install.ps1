@@ -32,7 +32,7 @@ $Script:INSTALLER_VERSION = "v2.2"
 
 $Script:CLAUDE_MODEL = "claude-opus-4-6"
 $Script:CODEX_MODEL  = "gpt-5.4"
-$Script:GEMINI_MODEL = "gemini-3.1-pro-preview"
+$Script:GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 
 $Script:UTF8NoBom = New-Object System.Text.UTF8Encoding($false)
 $Script:NpmExe = $null
