@@ -2,7 +2,7 @@
 
 MAX API 一键安装 **Claude Code**、**Codex CLI**、**Gemini CLI** 三大 AI 编程助手，专为中国大陆用户优化。
 
-自动处理：Node.js/Git 依赖安装、npm 源选择与加速、安装前 MAX API 预检查、API 配置、PowerShell 兼容修复。
+自动处理：Node.js/Git 依赖安装、npm 源选择与加速、安装前 MAX API 双线路预检查、API 配置、PowerShell 兼容修复。
 
 ## 一键安装
 
@@ -27,7 +27,7 @@ irm https://kk.eemby.de/https://raw.githubusercontent.com/Sdongmaker/agentInstal
 1. **检测环境** — 确认 Windows x86_64、PowerShell 版本
 2. **选择工具** — 你可以选择安装全部或部分工具
 3. **输入 API Key** — 输入一次，所有工具共用
-4. **预检查 MAX API** — 在安装开始前先测试服务可达性与认证状态，便于区分网络/API 问题和安装问题
+4. **预检查 MAX API** — 在安装开始前先对两条 HTTPS 线路各执行 10 次 ping，优先选择丢包率更低的线路，再测试服务可达性与认证状态
 5. **安装依赖** — 自动安装 Git（Claude Code 需要）和 Node.js 20+
 6. **安装工具** — Codex CLI / Gemini CLI 默认走国内镜像；Claude Code 为确保 Windows 原生二进制完整，固定走官方 npm 源
 7. **配置完成** — 自动写入配置文件、禁用 PowerShell `.ps1` shim、尝试修复执行策略，并执行一次真实 API 调用测试
@@ -112,6 +112,19 @@ npm config set registry https://registry.npmmirror.com
 ```
 
 如果是 Claude Code 安装阶段超时，原因通常是当前网络无法访问官方 `registry.npmjs.org`。这时请更换网络、配置代理，或在能访问官方 npm 的环境下重试。
+
+### MAX API 会使用哪条线路
+
+安装脚本目前内置两条 HTTPS 线路：
+
+- `https://new.28.al`
+- `https://new.1huanlesap02.top`
+
+预检查阶段会分别对两条线路执行 10 次 ping，优先选择丢包率更低的线路；如果丢包率相同，则再比较平均延迟。选中的线路会用于：
+
+- 安装前的 MAX API 连通性预检查
+- Claude / Codex / Gemini 的配置写入
+- 安装结束后的真实调用测试
 
 ### 为什么安装结束后还会再跑一次真实调用测试
 
