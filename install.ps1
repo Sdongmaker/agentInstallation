@@ -360,6 +360,33 @@ function Read-JsonConfigOrDefault {
     }
 }
 
+function Show-TextPreview {
+    <#
+    .SYNOPSIS
+        将指定文本按预览框打印到终端
+    #>
+    param(
+        [string]$Title,
+        [string]$Content,
+        [string]$Path
+    )
+
+    Write-Warn "下方将输出 $Title 的最终内容，可能包含敏感信息，请勿随意分享截图"
+    Write-Host "  ┌─ $Title" -ForegroundColor DarkGray
+    if (-not [string]::IsNullOrWhiteSpace($Path)) {
+        Write-Host "  │ 路径: $Path" -ForegroundColor DarkGray
+    }
+    Write-Host "  ├──────────────────────────────────────────────────" -ForegroundColor DarkGray
+    if ([string]::IsNullOrEmpty($Content)) {
+        Write-Host "  │ <空内容>" -ForegroundColor DarkGray
+    } else {
+        foreach ($line in ($Content -split "`r?`n")) {
+            Write-Host "  │ $line" -ForegroundColor Gray
+        }
+    }
+    Write-Host "  └──────────────────────────────────────────────────" -ForegroundColor DarkGray
+}
+
 function Show-FilePreview {
     <#
     .SYNOPSIS
@@ -376,18 +403,7 @@ function Show-FilePreview {
     }
 
     $content = Get-Content $Path -Raw -ErrorAction SilentlyContinue
-    Write-Warn "下方将输出 $Title 的最终内容，可能包含敏感信息，请勿随意分享截图"
-    Write-Host "  ┌─ $Title" -ForegroundColor DarkGray
-    Write-Host "  │ 路径: $Path" -ForegroundColor DarkGray
-    Write-Host "  ├──────────────────────────────────────────────────" -ForegroundColor DarkGray
-    if ([string]::IsNullOrEmpty($content)) {
-        Write-Host "  │ <空文件>" -ForegroundColor DarkGray
-    } else {
-        foreach ($line in ($content -split "`r?`n")) {
-            Write-Host "  │ $line" -ForegroundColor Gray
-        }
-    }
-    Write-Host "  └──────────────────────────────────────────────────" -ForegroundColor DarkGray
+    Show-TextPreview -Title $Title -Content $content -Path $Path
 }
 
 function Show-EnvPreview {
@@ -499,6 +515,137 @@ experimental_bearer_token = "$ApiKey"
     $parts += $providerBlock.TrimEnd()
 
     return (($parts -join "`n`n").Trim() + "`n")
+}
+
+function Upsert-ManagedContentBlock {
+    <#
+    .SYNOPSIS
+        在文本中更新或插入带标记的托管内容块
+    #>
+    param(
+        [string]$ExistingContent,
+        [string]$StartMarker,
+        [string]$EndMarker,
+        [string]$BlockContent
+    )
+
+    $managedBlock = @"
+$StartMarker
+$BlockContent
+$EndMarker
+"@
+
+    if ([string]::IsNullOrWhiteSpace($ExistingContent)) {
+        return ($managedBlock.Trim() + "`n")
+    }
+
+    $escapedStart = [regex]::Escape($StartMarker)
+    $escapedEnd   = [regex]::Escape($EndMarker)
+    $pattern = "(?s)$escapedStart.*?$escapedEnd"
+
+    $match = [regex]::Match($ExistingContent, $pattern)
+    if ($match.Success) {
+        $managedTrimmed = $managedBlock.Trim()
+        $updated = $ExistingContent.Substring(0, $match.Index) + $managedTrimmed + $ExistingContent.Substring($match.Index + $match.Length)
+        return ($updated.TrimEnd() + "`n")
+    }
+
+    return (($ExistingContent.TrimEnd() + "`n`n" + $managedBlock.Trim()) + "`n")
+}
+
+function Get-PowerShellWrapperFunctionBody {
+    <#
+    .SYNOPSIS
+        生成 PowerShell 命令包装器，强制调用 npm 生成的 .cmd shim
+    #>
+    param([string[]]$Commands)
+
+    $uniqueCommands = @($Commands | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    if ($uniqueCommands.Count -eq 0) { return "" }
+
+    $lines = New-Object System.Collections.Generic.List[string]
+    $lines.Add('function global:Invoke-MaxApiCliShim {')
+    $lines.Add('    param(')
+    $lines.Add('        [Parameter(Mandatory = $true)][string]$CommandName,')
+    $lines.Add('        [Parameter(ValueFromRemainingArguments = $true)][object[]]$ForwardArgs')
+    $lines.Add('    )')
+    $lines.Add('')
+    $lines.Add('    $shim = Get-Command "$CommandName.cmd" -ErrorAction SilentlyContinue')
+    $lines.Add('    if (-not $shim) {')
+    $lines.Add('        Write-Error "未找到 $CommandName.cmd，请确认 CLI 已安装，或关闭后重新打开终端。"')
+    $lines.Add('        return')
+    $lines.Add('    }')
+    $lines.Add('')
+    $lines.Add('    & $shim.Source @ForwardArgs')
+    $lines.Add('}')
+    $lines.Add('')
+
+    foreach ($command in $uniqueCommands) {
+        $lines.Add("function global:$command {")
+        $lines.Add('    Invoke-MaxApiCliShim -CommandName ''' + $command + ''' -ForwardArgs $args')
+        $lines.Add('}')
+        $lines.Add('')
+    }
+
+    return ($lines.ToArray() -join "`n").TrimEnd()
+}
+
+function Install-PowerShellCliWrappers {
+    <#
+    .SYNOPSIS
+        为 Windows PowerShell 与 PowerShell 7 写入 profile 包装器，绕过 .ps1 执行策略限制
+    #>
+    param([string[]]$Commands)
+
+    $uniqueCommands = @($Commands | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    if ($uniqueCommands.Count -eq 0) {
+        Write-Info "没有需要写入 PowerShell 包装器的命令"
+        return
+    }
+
+    Write-Step "配置 PowerShell 启动包装器"
+    Write-Info "将为以下命令生成 PowerShell 包装器: $($uniqueCommands -join ', ')"
+
+    $startMarker = "# >>> MAX API PowerShell CLI Wrappers >>>"
+    $endMarker   = "# <<< MAX API PowerShell CLI Wrappers <<<"
+    $wrapperBody = Get-PowerShellWrapperFunctionBody -Commands $uniqueCommands
+
+    $profilePaths = @(
+        Join-Path $env:USERPROFILE "Documents\WindowsPowerShell\profile.ps1",
+        Join-Path $env:USERPROFILE "Documents\PowerShell\profile.ps1"
+    ) | Select-Object -Unique
+
+    foreach ($profilePath in $profilePaths) {
+        Ensure-Directory (Split-Path $profilePath -Parent)
+
+        $existingContent = ""
+        if (Test-Path $profilePath) {
+            $existingContent = Get-Content $profilePath -Raw -ErrorAction SilentlyContinue
+        }
+
+        $updatedContent = Upsert-ManagedContentBlock `
+            -ExistingContent $existingContent `
+            -StartMarker $startMarker `
+            -EndMarker $endMarker `
+            -BlockContent $wrapperBody
+
+        Backup-FileIfExists -Path $profilePath | Out-Null
+        Write-TextUtf8NoBom -Path $profilePath -Content $updatedContent
+        Write-Success "PowerShell 包装器已写入: $profilePath"
+        $wrapperPreview = @"
+$startMarker
+$wrapperBody
+$endMarker
+"@
+        Show-TextPreview -Title "PowerShell Profile 托管包装器片段" -Content $wrapperPreview -Path $profilePath
+    }
+
+    try {
+        Invoke-Expression $wrapperBody
+        Write-Success "当前 PowerShell 会话已加载命令包装器，可立即测试"
+    } catch {
+        Write-Warn "当前会话加载 PowerShell 包装器失败，但 profile 已写入；重新打开终端后仍会生效"
+    }
 }
 
 function Test-IsAdmin {
@@ -1031,6 +1178,9 @@ function Show-Summary {
 
         Write-Host "  MAX API 服务: $Script:API_BASE_URL" -ForegroundColor Magenta
         Write-Host ""
+        Write-Host "  已自动写入 PowerShell profile 包装器，PowerShell 中会优先调用 .cmd 版本" -ForegroundColor Gray
+        Write-Host "  可避免 codex / gemini / claude 被 .ps1 执行策略拦截" -ForegroundColor Gray
+        Write-Host ""
         Write-Host "  ⚠ 重要: 如果命令未找到，请关闭并重新打开终端窗口" -ForegroundColor Yellow
     }
 
@@ -1109,7 +1259,19 @@ function Main {
         $results["gemini"] = Install-GeminiCli -ApiKey $apiKey
     }
 
-    # 8. 汇总
+    # 8. 配置 PowerShell 包装器，避免 npm 生成的 .ps1 shim 被执行策略拦截
+    $successfulCommands = @()
+    foreach ($tool in $selectedTools) {
+        if (-not $results[$tool]) { continue }
+        switch ($tool) {
+            "claude" { $successfulCommands += "claude" }
+            "codex"  { $successfulCommands += "codex" }
+            "gemini" { $successfulCommands += "gemini" }
+        }
+    }
+    Install-PowerShellCliWrappers -Commands $successfulCommands
+
+    # 9. 汇总
     Show-Summary -SelectedTools $selectedTools -Results $results
 
     Write-Host ""
