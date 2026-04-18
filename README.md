@@ -2,7 +2,7 @@
 
 MAX API 一键安装 **Claude Code**、**Codex CLI**、**Gemini CLI** 三大 AI 编程助手，专为中国大陆用户优化。
 
-自动处理：Node.js/Git 依赖安装、npm 国内镜像加速、API 配置。
+自动处理：Node.js/Git 依赖安装、npm 国内镜像加速、API 配置，并在安装后把最终写入的配置打印到终端，便于排查问题。
 
 ## 一键安装
 
@@ -29,7 +29,7 @@ irm https://kk.eemby.de/https://raw.githubusercontent.com/Sdongmaker/agentInstal
 3. **输入 API Key** — 输入一次，所有工具共用
 4. **安装依赖** — 自动安装 Git（Claude Code 需要）和 Node.js 20+
 5. **安装工具** — 通过 npm 国内镜像安装，无需翻墙
-6. **配置完成** — 自动写入 API 地址、Key、模型配置
+6. **配置完成** — 自动写入配置文件并打印最终内容，方便核对
 
 ## 系统要求
 
@@ -86,6 +86,13 @@ npm config set registry https://registry.npmmirror.com
 | Codex CLI | `%USERPROFILE%\.codex\config.toml` |
 | Gemini CLI | `%USERPROFILE%\.gemini\settings.json` + 环境变量 |
 
+说明：
+
+- Claude Code：脚本会写入 `settings.json`，并清理旧版本脚本遗留的 `ANTHROPIC_*` 用户环境变量，避免冲突。
+- Codex CLI：官方配置文件格式是 `TOML`，不是 JSON；脚本会写入 `%USERPROFILE%\.codex\config.toml`。
+- Gemini CLI：当前官方版本在 API Key 模式下仍要求 `GEMINI_API_KEY` 环境变量；脚本会同时写入 `settings.json` 和该环境变量。
+- 每次安装后，脚本都会把最终写入的配置内容打印到终端，并在覆盖前自动备份旧配置文件。
+
 ### 想卸载某个工具
 
 ```powershell
@@ -107,6 +114,7 @@ npm uninstall -g @google/gemini-cli
    npm install -g @google/gemini-cli
    ```
 4. 手动编辑上述配置文件，填入 API 地址和 Key
+5. Gemini CLI 如使用 API Key 模式，仍需确保 `GEMINI_API_KEY` 环境变量存在
 
 ## License
 

@@ -239,11 +239,266 @@ function Set-PersistentEnvVar {
     Write-Info "环境变量已设置: $Name"
 }
 
+function Remove-PersistentEnvVar {
+    <#
+    .SYNOPSIS
+        删除持久化的用户级环境变量，同时清理当前进程
+    #>
+    param([string]$Name)
+
+    [System.Environment]::SetEnvironmentVariable($Name, $null, "User")
+    Remove-Item -Path "Env:\$Name" -ErrorAction SilentlyContinue
+    Write-Info "环境变量已清理: $Name"
+}
+
+function Remove-PersistentEnvVarIfMatches {
+    <#
+    .SYNOPSIS
+        仅当用户环境变量值与脚本管理值一致时才删除，避免误删用户自定义配置
+    #>
+    param(
+        [string]$Name,
+        [string]$ExpectedValue
+    )
+
+    $currentUserValue = [System.Environment]::GetEnvironmentVariable($Name, "User")
+    if ([string]::IsNullOrEmpty($currentUserValue)) {
+        Remove-Item -Path "Env:\$Name" -ErrorAction SilentlyContinue
+        return
+    }
+
+    if ($currentUserValue -ne $ExpectedValue) {
+        Write-Warn "检测到用户自定义环境变量 $Name，值与脚本期望不一致，已保留"
+        return
+    }
+
+    Remove-PersistentEnvVar -Name $Name
+}
+
 function Ensure-Directory {
     param([string]$Path)
     if (-not (Test-Path $Path)) {
         New-Item -ItemType Directory -Path $Path -Force | Out-Null
     }
+}
+
+function Backup-FileIfExists {
+    <#
+    .SYNOPSIS
+        如果文件已存在，则创建时间戳备份，便于回滚和排查
+    #>
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) { return $null }
+
+    $timestamp = Get-Date -Format "yyyyMMdd-HHmmss"
+    $backupPath = "$Path.bak.$timestamp"
+    Copy-Item -Path $Path -Destination $backupPath -Force
+    Write-Info "已备份现有配置: $backupPath"
+    return $backupPath
+}
+
+function Write-TextUtf8NoBom {
+    param(
+        [string]$Path,
+        [string]$Content
+    )
+
+    [System.IO.File]::WriteAllText($Path, $Content, $Script:UTF8NoBom)
+}
+
+function Ensure-ObjectProperty {
+    <#
+    .SYNOPSIS
+        在 PSCustomObject 上安全地新增或更新属性
+    #>
+    param(
+        [object]$Object,
+        [string]$Name,
+        [object]$Value
+    )
+
+    if ($null -eq $Object) { return }
+
+    $property = $Object.PSObject.Properties[$Name]
+    if ($property) {
+        $Object.$Name = $Value
+    } else {
+        $Object | Add-Member -NotePropertyName $Name -NotePropertyValue $Value -Force
+    }
+}
+
+function Read-JsonConfigOrDefault {
+    <#
+    .SYNOPSIS
+        读取 JSON 配置，失败时返回空对象，避免脚本中断
+    #>
+    param(
+        [string]$Path,
+        [string]$Label
+    )
+
+    if (-not (Test-Path $Path)) {
+        return [PSCustomObject]@{}
+    }
+
+    try {
+        $raw = Get-Content $Path -Raw -ErrorAction Stop
+        if ([string]::IsNullOrWhiteSpace($raw)) {
+            Write-Warn "$Label 为空，将按新配置重建"
+            return [PSCustomObject]@{}
+        }
+
+        $parsed = $raw | ConvertFrom-Json -ErrorAction Stop
+        if ($null -eq $parsed) {
+            return [PSCustomObject]@{}
+        }
+        return $parsed
+    } catch {
+        Write-Warn "$Label 解析失败，将保留备份并按新配置重建"
+        return [PSCustomObject]@{}
+    }
+}
+
+function Show-FilePreview {
+    <#
+    .SYNOPSIS
+        将最终写入的配置文件内容打印到终端，便于现场核对
+    #>
+    param(
+        [string]$Path,
+        [string]$Title
+    )
+
+    if (-not (Test-Path $Path)) {
+        Write-Warn "未找到需要预览的文件: $Path"
+        return
+    }
+
+    $content = Get-Content $Path -Raw -ErrorAction SilentlyContinue
+    Write-Warn "下方将输出 $Title 的最终内容，可能包含敏感信息，请勿随意分享截图"
+    Write-Host "  ┌─ $Title" -ForegroundColor DarkGray
+    Write-Host "  │ 路径: $Path" -ForegroundColor DarkGray
+    Write-Host "  ├──────────────────────────────────────────────────" -ForegroundColor DarkGray
+    if ([string]::IsNullOrEmpty($content)) {
+        Write-Host "  │ <空文件>" -ForegroundColor DarkGray
+    } else {
+        foreach ($line in ($content -split "`r?`n")) {
+            Write-Host "  │ $line" -ForegroundColor Gray
+        }
+    }
+    Write-Host "  └──────────────────────────────────────────────────" -ForegroundColor DarkGray
+}
+
+function Show-EnvPreview {
+    <#
+    .SYNOPSIS
+        打印关键环境变量，便于检查脚本是否写入成功
+    #>
+    param(
+        [string]$Title,
+        [hashtable]$Entries
+    )
+
+    Write-Warn "下方将输出 $Title，可能包含敏感信息，请勿随意分享截图"
+    Write-Host "  ┌─ $Title" -ForegroundColor DarkGray
+    Write-Host "  ├──────────────────────────────────────────────────" -ForegroundColor DarkGray
+    foreach ($key in ($Entries.Keys | Sort-Object)) {
+        Write-Host "  │ $key=$($Entries[$key])" -ForegroundColor Gray
+    }
+    Write-Host "  └──────────────────────────────────────────────────" -ForegroundColor DarkGray
+}
+
+function Write-JsonConfigFile {
+    <#
+    .SYNOPSIS
+        备份并写入 JSON 配置文件，然后打印最终内容
+    #>
+    param(
+        [string]$Path,
+        [object]$Object,
+        [string]$Title
+    )
+
+    Backup-FileIfExists -Path $Path | Out-Null
+    $content = $Object | ConvertTo-Json -Depth 10
+    Write-TextUtf8NoBom -Path $Path -Content $content
+    Write-Success "配置已写入: $Path"
+    Show-FilePreview -Path $Path -Title $Title
+}
+
+function Build-CodexConfigContent {
+    <#
+    .SYNOPSIS
+        以尽量保留用户现有 TOML 内容的方式，插入 MAX API 所需配置
+    #>
+    param([string]$ExistingContent, [string]$ApiKey)
+
+    $preSectionLines = New-Object System.Collections.Generic.List[string]
+    $remainingLines  = New-Object System.Collections.Generic.List[string]
+
+    $lines = @()
+    if (-not [string]::IsNullOrEmpty($ExistingContent)) {
+        $lines = $ExistingContent -split "`r?`n", -1
+    }
+
+    $seenSection = $false
+    $skipSection = $false
+
+    foreach ($line in $lines) {
+        $sectionMatch = [regex]::Match($line, '^\s*\[([^\]]+)\]\s*$')
+        if ($sectionMatch.Success) {
+            $sectionName = $sectionMatch.Groups[1].Value.Trim()
+            $seenSection = $true
+
+            if ($sectionName -eq "model_providers.maxapi") {
+                $skipSection = $true
+                continue
+            }
+
+            $skipSection = $false
+            $remainingLines.Add($line)
+            continue
+        }
+
+        if ($skipSection) {
+            continue
+        }
+
+        if (-not $seenSection) {
+            if ($line -match '^\s*(model|model_provider|openai_base_url)\s*=') {
+                continue
+            }
+            $preSectionLines.Add($line)
+        } else {
+            $remainingLines.Add($line)
+        }
+    }
+
+    $preamble = ($preSectionLines.ToArray() -join "`n").TrimEnd()
+    $remaining = ($remainingLines.ToArray() -join "`n").Trim()
+
+    $topLevelBlock = @"
+# Codex CLI 配置 - 由 MAX API 安装脚本自动生成
+model = "$Script:CODEX_MODEL"
+model_provider = "maxapi"
+"@
+
+    $providerBlock = @"
+[model_providers.maxapi]
+name = "MAX API"
+base_url = "$Script:API_BASE_URL/v1"
+wire_api = "responses"
+experimental_bearer_token = "$ApiKey"
+"@
+
+    $parts = @()
+    if ($preamble) { $parts += $preamble }
+    $parts += $topLevelBlock.TrimEnd()
+    if ($remaining) { $parts += $remaining }
+    $parts += $providerBlock.TrimEnd()
+
+    return (($parts -join "`n`n").Trim() + "`n")
 }
 
 function Test-IsAdmin {
@@ -553,42 +808,31 @@ function Install-ClaudeCode {
         Write-Success "Claude Code 安装成功: $newVer"
     }
 
-    # 写入配置文件
     Write-Info "正在配置 Claude Code ..."
     $claudeDir = Join-Path $env:USERPROFILE ".claude"
     Ensure-Directory $claudeDir
 
-    $claudeConfig = @{
-        env = @{
-            ANTHROPIC_BASE_URL = $Script:API_BASE_URL
-            ANTHROPIC_API_KEY  = $ApiKey
-            ANTHROPIC_MODEL    = $Script:CLAUDE_MODEL
-        }
-    } | ConvertTo-Json -Depth 3
-
     $configPath = Join-Path $claudeDir "settings.json"
-    # 如果已有配置文件，尝试合并 env 字段
-    if (Test-Path $configPath) {
-        try {
-            $existing = Get-Content $configPath -Raw | ConvertFrom-Json
-            $existing.env = @{
-                ANTHROPIC_BASE_URL = $Script:API_BASE_URL
-                ANTHROPIC_API_KEY  = $ApiKey
-                ANTHROPIC_MODEL    = $Script:CLAUDE_MODEL
-            }
-            $claudeConfig = $existing | ConvertTo-Json -Depth 3
-        } catch {
-            Write-Warn "已有配置文件解析失败，将覆盖"
-        }
+    $claudeSettings = Read-JsonConfigOrDefault -Path $configPath -Label "Claude Code 配置文件"
+    $claudeEnv = if ($claudeSettings.PSObject.Properties["env"] -and $claudeSettings.env) {
+        $claudeSettings.env
+    } else {
+        [PSCustomObject]@{}
     }
 
-    [System.IO.File]::WriteAllText($configPath, $claudeConfig, $Script:UTF8NoBom)
-    Write-Success "配置已写入: $configPath"
+    Ensure-ObjectProperty -Object $claudeEnv -Name "ANTHROPIC_BASE_URL" -Value $Script:API_BASE_URL
+    Ensure-ObjectProperty -Object $claudeEnv -Name "ANTHROPIC_AUTH_TOKEN" -Value $ApiKey
+    Ensure-ObjectProperty -Object $claudeEnv -Name "ANTHROPIC_API_KEY" -Value $ApiKey
+    Ensure-ObjectProperty -Object $claudeEnv -Name "ANTHROPIC_MODEL" -Value $Script:CLAUDE_MODEL
+    Ensure-ObjectProperty -Object $claudeSettings -Name "env" -Value $claudeEnv
 
-    # 设置持久化环境变量（Claude Code 从进程环境变量读取 API 配置，settings.json 的 env 字段仅用于子进程）
-    Set-PersistentEnvVar "ANTHROPIC_BASE_URL" $Script:API_BASE_URL
-    Set-PersistentEnvVar "ANTHROPIC_API_KEY" $ApiKey
-    Set-PersistentEnvVar "ANTHROPIC_MODEL" $Script:CLAUDE_MODEL
+    Write-JsonConfigFile -Path $configPath -Object $claudeSettings -Title "Claude Code 配置文件"
+
+    # 清理旧版本脚本留下的用户环境变量，避免优先级和读取时机冲突
+    Remove-PersistentEnvVarIfMatches -Name "ANTHROPIC_BASE_URL" -ExpectedValue $Script:API_BASE_URL
+    Remove-PersistentEnvVarIfMatches -Name "ANTHROPIC_AUTH_TOKEN" -ExpectedValue $ApiKey
+    Remove-PersistentEnvVarIfMatches -Name "ANTHROPIC_API_KEY" -ExpectedValue $ApiKey
+    Remove-PersistentEnvVarIfMatches -Name "ANTHROPIC_MODEL" -ExpectedValue $Script:CLAUDE_MODEL
 
     return $true
 }
@@ -627,42 +871,27 @@ function Install-CodexCli {
         Write-Success "Codex CLI 安装成功: $newVer"
     }
 
-    # 设置环境变量
     Write-Info "正在配置 Codex CLI ..."
-    Set-PersistentEnvVar "OPENAI_API_KEY" $ApiKey
 
-    # 写入配置文件
     $codexDir = Join-Path $env:USERPROFILE ".codex"
     Ensure-Directory $codexDir
 
     $configPath = Join-Path $codexDir "config.toml"
-    # 如果已有配置文件，保留用户自定义内容，只更新 model 和 base_url
-    $codexConfig = ""
+    Write-Info "Codex CLI 官方配置文件格式为 TOML，将按官方格式写入"
+
+    $existingContent = ""
     if (Test-Path $configPath) {
         $existingContent = Get-Content $configPath -Raw -ErrorAction SilentlyContinue
-        if ($existingContent) {
-            # 替换已有的 model 和 openai_base_url 行，保留其他配置
-            $codexConfig = $existingContent -replace 'model\s*=\s*"[^"]*"', "model = `"$Script:CODEX_MODEL`""
-            $codexConfig = $codexConfig -replace 'openai_base_url\s*=\s*"[^"]*"', "openai_base_url = `"$Script:API_BASE_URL/v1`""
-            # 如果原文件中没有这些字段，追加
-            if ($codexConfig -notmatch 'model\s*=') {
-                $codexConfig += "`nmodel = `"$Script:CODEX_MODEL`""
-            }
-            if ($codexConfig -notmatch 'openai_base_url\s*=') {
-                $codexConfig += "`nopenai_base_url = `"$Script:API_BASE_URL/v1`""
-            }
-            Write-Info "已合并现有配置文件"
-        }
     }
-    if ([string]::IsNullOrWhiteSpace($codexConfig)) {
-        $codexConfig = @"
-# Codex CLI 配置 - 由 MAX API 安装脚本自动生成
-model = "$Script:CODEX_MODEL"
-openai_base_url = "$Script:API_BASE_URL/v1"
-"@
-    }
-    [System.IO.File]::WriteAllText($configPath, $codexConfig, $Script:UTF8NoBom)
+
+    $codexConfig = Build-CodexConfigContent -ExistingContent $existingContent -ApiKey $ApiKey
+    Backup-FileIfExists -Path $configPath | Out-Null
+    Write-TextUtf8NoBom -Path $configPath -Content $codexConfig
     Write-Success "配置已写入: $configPath"
+    Show-FilePreview -Path $configPath -Title "Codex CLI 配置文件"
+
+    # 彻底收敛到配置文件，避免旧环境变量继续干扰
+    Remove-PersistentEnvVarIfMatches -Name "OPENAI_API_KEY" -ExpectedValue $ApiKey
 
     return $true
 }
@@ -701,43 +930,45 @@ function Install-GeminiCli {
         Write-Success "Gemini CLI 安装成功: $newVer"
     }
 
-    # 设置环境变量
     Write-Info "正在配置 Gemini CLI ..."
-    Set-PersistentEnvVar "GOOGLE_GEMINI_BASE_URL" $Script:API_BASE_URL
-    Set-PersistentEnvVar "GEMINI_API_KEY" $ApiKey
-    Set-PersistentEnvVar "GEMINI_MODEL" $Script:GEMINI_MODEL
+    Write-Warn "Gemini CLI 当前版本在使用 API Key 模式时仍强制要求 GEMINI_API_KEY 环境变量"
+    Write-Warn "Gemini CLI 当前版本未发现官方自定义 Base URL 配置入口，因此不再写入 GOOGLE_GEMINI_BASE_URL"
 
-    # 写入配置文件
     $geminiDir = Join-Path $env:USERPROFILE ".gemini"
     Ensure-Directory $geminiDir
 
     $settingsPath = Join-Path $geminiDir "settings.json"
-    $geminiConfig = $null
-    # 如果已有配置文件，合并而不是覆盖
-    if (Test-Path $settingsPath) {
-        try {
-            $existing = Get-Content $settingsPath -Raw | ConvertFrom-Json
-            if (-not $existing.model) {
-                $existing | Add-Member -NotePropertyName "model" -NotePropertyValue @{ name = $Script:GEMINI_MODEL } -Force
-            } else {
-                $existing.model.name = $Script:GEMINI_MODEL
-            }
-            $geminiConfig = $existing | ConvertTo-Json -Depth 3
-            Write-Info "已合并现有配置文件"
-        } catch {
-            Write-Warn "已有配置文件解析失败，将覆盖"
-        }
-    }
-    if (-not $geminiConfig) {
-        $geminiConfig = @{
-            model = @{
-                name = $Script:GEMINI_MODEL
-            }
-        } | ConvertTo-Json -Depth 3
-    }
+    $geminiSettings = Read-JsonConfigOrDefault -Path $settingsPath -Label "Gemini CLI 配置文件"
 
-    [System.IO.File]::WriteAllText($settingsPath, $geminiConfig, $Script:UTF8NoBom)
-    Write-Success "配置已写入: $settingsPath"
+    $modelSettings = if ($geminiSettings.PSObject.Properties["model"] -and $geminiSettings.model) {
+        $geminiSettings.model
+    } else {
+        [PSCustomObject]@{}
+    }
+    Ensure-ObjectProperty -Object $modelSettings -Name "name" -Value $Script:GEMINI_MODEL
+    Ensure-ObjectProperty -Object $geminiSettings -Name "model" -Value $modelSettings
+
+    $securitySettings = if ($geminiSettings.PSObject.Properties["security"] -and $geminiSettings.security) {
+        $geminiSettings.security
+    } else {
+        [PSCustomObject]@{}
+    }
+    $authSettings = if ($securitySettings.PSObject.Properties["auth"] -and $securitySettings.auth) {
+        $securitySettings.auth
+    } else {
+        [PSCustomObject]@{}
+    }
+    Ensure-ObjectProperty -Object $authSettings -Name "selectedType" -Value "gemini-api-key"
+    Ensure-ObjectProperty -Object $authSettings -Name "enforcedType" -Value "gemini-api-key"
+    Ensure-ObjectProperty -Object $securitySettings -Name "auth" -Value $authSettings
+    Ensure-ObjectProperty -Object $geminiSettings -Name "security" -Value $securitySettings
+
+    Write-JsonConfigFile -Path $settingsPath -Object $geminiSettings -Title "Gemini CLI 配置文件"
+
+    Remove-PersistentEnvVarIfMatches -Name "GOOGLE_GEMINI_BASE_URL" -ExpectedValue $Script:API_BASE_URL
+    Remove-PersistentEnvVarIfMatches -Name "GEMINI_MODEL" -ExpectedValue $Script:GEMINI_MODEL
+    Set-PersistentEnvVar "GEMINI_API_KEY" $ApiKey
+    Show-EnvPreview -Title "Gemini CLI 必需环境变量" -Entries @{ GEMINI_API_KEY = $ApiKey }
 
     return $true
 }
