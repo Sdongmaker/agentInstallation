@@ -1230,6 +1230,8 @@ function Get-MaxApiRoutePingStats {
 }
 
 function Select-MaxApiRoute {
+    Write-Step "检测 MAX API 线路"
+
     $count = 10
     Write-Info "正在对候选 MAX API 线路执行 $count 次 ping 测试 ..."
 
@@ -1288,211 +1290,6 @@ function Select-MaxApiRoute {
         Selected  = $selected
         Candidates = $sortedStats
     }
-}
-
-function Invoke-MaxApiProbe {
-    param(
-        [object]$RouteStats,
-        [string]$ApiKey
-    )
-
-    $probeUri = "$($RouteStats.BaseUrl)/v1/models"
-    $headers = @{
-        "Authorization" = "Bearer $ApiKey"
-        "Accept"        = "application/json"
-    }
-
-    Write-Info "正在测试 $($RouteStats.Name) 的 HTTPS 可达性与认证状态 ..."
-    Write-Info "探测端点: $probeUri"
-
-    try {
-        $response = Invoke-WebRequest -Uri $probeUri -Headers $headers -Method Get -UseBasicParsing -TimeoutSec 15 -ErrorAction Stop
-        $statusCode = [int]$response.StatusCode
-        $modelCount = $null
-        $parsed = $null
-
-        if (-not [string]::IsNullOrWhiteSpace($response.Content)) {
-            try {
-                $parsed = $response.Content | ConvertFrom-Json -ErrorAction Stop
-            } catch {}
-        }
-
-        if ($parsed -and $parsed.PSObject.Properties["data"] -and $null -ne $parsed.data) {
-            try {
-                $modelCount = @($parsed.data).Count
-            } catch {}
-        }
-
-        return [PSCustomObject]@{
-            Success         = $true
-            Reachable       = $true
-            Authenticated   = $true
-            StatusCode      = $statusCode
-            Endpoint        = $probeUri
-            RouteName       = $RouteStats.Name
-            BaseUrl         = $RouteStats.BaseUrl
-            Message         = "MAX API 服务可达，认证通过。"
-            ModelCount      = $modelCount
-            SkipSmokeTests  = $false
-            ShouldContinue  = $false
-        }
-    } catch {
-        $statusCode = $null
-        $statusDescription = $null
-        $failureMessage = $_.Exception.Message
-
-        if ($_.Exception.Response) {
-            try {
-                $statusCode = [int]$_.Exception.Response.StatusCode
-            } catch {}
-            try {
-                $statusDescription = [string]$_.Exception.Response.StatusDescription
-            } catch {}
-        }
-
-        if ($statusCode -eq 401 -or $statusCode -eq 403) {
-            $message = "MAX API 服务可达，但 API Key 未通过认证。"
-            if (-not [string]::IsNullOrWhiteSpace($statusDescription)) {
-                $message += " HTTP $statusCode $statusDescription。"
-            } else {
-                $message += " HTTP $statusCode。"
-            }
-
-            return [PSCustomObject]@{
-                Success         = $false
-                Reachable       = $true
-                Authenticated   = $false
-                StatusCode      = $statusCode
-                Endpoint        = $probeUri
-                RouteName       = $RouteStats.Name
-                BaseUrl         = $RouteStats.BaseUrl
-                Message         = $message
-                ModelCount      = $null
-                SkipSmokeTests  = $true
-                ShouldContinue  = $false
-            }
-        }
-
-        if ($null -ne $statusCode) {
-            $message = "MAX API 已响应，但返回了异常状态。"
-            if (-not [string]::IsNullOrWhiteSpace($statusDescription)) {
-                $message += " HTTP $statusCode $statusDescription。"
-            } else {
-                $message += " HTTP $statusCode。"
-            }
-
-            return [PSCustomObject]@{
-                Success         = $false
-                Reachable       = $true
-                Authenticated   = $false
-                StatusCode      = $statusCode
-                Endpoint        = $probeUri
-                RouteName       = $RouteStats.Name
-                BaseUrl         = $RouteStats.BaseUrl
-                Message         = $message
-                ModelCount      = $null
-                SkipSmokeTests  = $true
-                ShouldContinue  = $true
-            }
-        }
-
-        return [PSCustomObject]@{
-            Success         = $false
-            Reachable       = $false
-            Authenticated   = $false
-            StatusCode      = $null
-            Endpoint        = $probeUri
-            RouteName       = $RouteStats.Name
-            BaseUrl         = $RouteStats.BaseUrl
-            Message         = "无法连接 MAX API 服务: $failureMessage"
-            ModelCount      = $null
-            SkipSmokeTests  = $true
-            ShouldContinue  = $true
-        }
-    }
-}
-
-function Test-MaxApiReachability {
-    param([string]$ApiKey)
-
-    Write-Step "检测 MAX API 服务"
-    $routeSelection = Select-MaxApiRoute
-    $orderedRoutes = @($routeSelection.Candidates)
-    $lastProbeResult = $null
-
-    for ($index = 0; $index -lt $orderedRoutes.Count; $index++) {
-        $routeStats = $orderedRoutes[$index]
-        $probeResult = Invoke-MaxApiProbe -RouteStats $routeStats -ApiKey $ApiKey
-        $lastProbeResult = $probeResult
-
-        if ($probeResult.Success) {
-            $Script:API_BASE_URL = $probeResult.BaseUrl
-            $Script:API_ROUTE_NAME = $probeResult.RouteName
-
-            Write-Success "MAX API 服务可达，认证通过。"
-            Write-Info "已使用线路: $($probeResult.RouteName)"
-            Write-Info "HTTP 状态: $($probeResult.StatusCode)"
-            if ($null -ne $probeResult.ModelCount) {
-                Write-Info "模型列表获取成功，共返回 $($probeResult.ModelCount) 个模型。"
-            }
-
-            return $probeResult
-        }
-
-        if ($probeResult.Reachable -and -not $probeResult.Authenticated -and ($probeResult.StatusCode -eq 401 -or $probeResult.StatusCode -eq 403)) {
-            $Script:API_BASE_URL = $probeResult.BaseUrl
-            $Script:API_ROUTE_NAME = $probeResult.RouteName
-
-            Write-Warn $probeResult.Message
-            Write-Warn "安装将继续，但会跳过最终真实调用测试。请检查 API Key 是否正确。"
-            return $probeResult
-        }
-
-        Write-Warn "$($probeResult.RouteName) 预检查失败: $($probeResult.Message)"
-        if ($probeResult.ShouldContinue -and $index -lt ($orderedRoutes.Count - 1)) {
-            Write-Info "正在尝试下一条候选线路 ..."
-            continue
-        }
-
-        break
-    }
-
-    if ($lastProbeResult) {
-        $finalMessage = "所有候选线路的 HTTPS 预检查都未通过。已保留丢包率最低的线路 $Script:API_ROUTE_NAME。最后一次错误: $($lastProbeResult.Message)"
-        Write-Warn $finalMessage
-        Write-Warn "安装将继续，以便先完成 CLI 部署；最终真实调用测试将跳过。"
-        return [PSCustomObject]@{
-            Success         = $false
-            Reachable       = $false
-            Authenticated   = $false
-            StatusCode      = $lastProbeResult.StatusCode
-            Endpoint        = "$Script:API_BASE_URL/v1/models"
-            RouteName       = $Script:API_ROUTE_NAME
-            BaseUrl         = $Script:API_BASE_URL
-            Message         = $finalMessage
-            ModelCount      = $null
-            SkipSmokeTests  = $true
-            ShouldContinue  = $false
-        }
-    }
-
-    $fallbackResult = [PSCustomObject]@{
-        Success         = $false
-        Reachable       = $false
-        Authenticated   = $false
-        StatusCode      = $null
-        Endpoint        = "$Script:API_BASE_URL/v1/models"
-        RouteName       = $Script:API_ROUTE_NAME
-        BaseUrl         = $Script:API_BASE_URL
-        Message         = "未能完成 MAX API 线路预检查。"
-        ModelCount      = $null
-        SkipSmokeTests  = $true
-        ShouldContinue  = $false
-    }
-
-    Write-Warn $fallbackResult.Message
-    Write-Warn "安装将继续，以便先完成 CLI 部署；最终真实调用测试将跳过。"
-    return $fallbackResult
 }
 
 function Install-GitIfNeeded {
@@ -2405,8 +2202,7 @@ function Test-ToolActualCall {
 function Run-ActualCallTests {
     param(
         [string[]]$SelectedTools,
-        [hashtable]$Results,
-        [object]$ApiPreflightResult
+        [hashtable]$Results
     )
 
     $testableTools = @($SelectedTools | Where-Object {
@@ -2420,15 +2216,6 @@ function Run-ActualCallTests {
     }
 
     Write-Step "最终实际调用测试"
-
-    if ($ApiPreflightResult -and $ApiPreflightResult.SkipSmokeTests) {
-        Write-Warn "由于安装前的 MAX API 服务预检查未通过，已跳过最终真实调用测试。"
-        foreach ($tool in $testableTools) {
-            Add-ToolWarning -Result $Results[$tool] -Message "已跳过实际调用测试：$($ApiPreflightResult.Message)"
-        }
-        return
-    }
-
     Write-Info "将对每个安装成功的工具发起一次极小的真实请求，以验证 API 连通性。"
 
     foreach ($tool in $testableTools) {
@@ -2460,7 +2247,7 @@ function Show-Summary {
     param(
         [string[]]$SelectedTools,
         [hashtable]$Results,
-        [object]$ApiPreflightResult
+        [object]$ApiRouteSelection
     )
 
     Write-Host ""
@@ -2468,21 +2255,12 @@ function Show-Summary {
     Write-Host "  安装结果汇总" -ForegroundColor Magenta
     Write-Host ""
 
-    if ($ApiPreflightResult) {
-        $preflightLabel = if ($ApiPreflightResult.Success) { "成功" } else { "警告" }
-        $preflightColor = if ($ApiPreflightResult.Success) { "Green" } else { "Yellow" }
-        Write-Host "    MAX API 预检查 : " -NoNewline -ForegroundColor White
-        Write-Host $preflightLabel -ForegroundColor $preflightColor
-        if (-not [string]::IsNullOrWhiteSpace($ApiPreflightResult.RouteName)) {
-            Write-Host "      线路: $($ApiPreflightResult.RouteName)" -ForegroundColor DarkGray
-        }
-        if (-not [string]::IsNullOrWhiteSpace($ApiPreflightResult.BaseUrl)) {
-            Write-Host "      地址: $($ApiPreflightResult.BaseUrl)" -ForegroundColor DarkGray
-        }
-        Write-Host "      结果: $($ApiPreflightResult.Message)" -ForegroundColor DarkGray
-        if ($null -ne $ApiPreflightResult.StatusCode) {
-            Write-Host "      HTTP 状态: $($ApiPreflightResult.StatusCode)" -ForegroundColor DarkGray
-        }
+    if ($ApiRouteSelection -and $ApiRouteSelection.Selected) {
+        Write-Host "    MAX API 线路 : " -NoNewline -ForegroundColor White
+        Write-Host "已选择" -ForegroundColor Green
+        Write-Host "      线路: $($ApiRouteSelection.Selected.Name)" -ForegroundColor DarkGray
+        Write-Host "      地址: $($ApiRouteSelection.Selected.BaseUrl)" -ForegroundColor DarkGray
+        Write-Host "      依据: 10 次 ping 后按丢包率最低优先，丢包率相同则比较平均延迟。" -ForegroundColor DarkGray
         Write-Host ""
     }
 
@@ -2587,7 +2365,7 @@ function Main {
     Write-Info "已选择: $($selectedTools -join ', ')"
 
     $apiKey = Read-ApiKey
-    $apiPreflightResult = Test-MaxApiReachability -ApiKey $apiKey
+    $apiRouteSelection = Select-MaxApiRoute
 
     if ($selectedTools -contains "claude") {
         if (-not (Install-GitIfNeeded)) {
@@ -2624,9 +2402,9 @@ function Main {
     Disable-PowerShellShims -Commands $successfulCommands
     Remove-LegacyPowerShellWrapperProfiles
     Repair-PowerShellExecutionPolicy
-    Run-ActualCallTests -SelectedTools $selectedTools -Results $results -ApiPreflightResult $apiPreflightResult
+    Run-ActualCallTests -SelectedTools $selectedTools -Results $results
 
-    Show-Summary -SelectedTools $selectedTools -Results $results -ApiPreflightResult $apiPreflightResult
+    Show-Summary -SelectedTools $selectedTools -Results $results -ApiRouteSelection $apiRouteSelection
 
     Write-Host ""
     Write-Host "  安装完成。" -ForegroundColor Green

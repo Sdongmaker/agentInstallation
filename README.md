@@ -2,7 +2,7 @@
 
 MAX API 一键安装 **Claude Code**、**Codex CLI**、**Gemini CLI** 三大 AI 编程助手，专为中国大陆用户优化。
 
-自动处理：Node.js/Git 依赖安装、npm 源选择与加速、安装前 MAX API 双线路预检查、API 配置、PowerShell 兼容修复。
+自动处理：Node.js/Git 依赖安装、npm 源选择与加速、安装前 MAX API 双线路 ping 选线、API 配置、PowerShell 兼容修复。
 
 ## 一键安装
 
@@ -27,7 +27,7 @@ irm https://kk.eemby.de/https://raw.githubusercontent.com/Sdongmaker/agentInstal
 1. **检测环境** — 确认 Windows x86_64、PowerShell 版本
 2. **选择工具** — 你可以选择安装全部或部分工具
 3. **输入 API Key** — 输入一次，所有工具共用
-4. **预检查 MAX API** — 在安装开始前先对两条 HTTPS 线路各执行 10 次 ping，优先选择丢包率更低的线路，再测试服务可达性与认证状态
+4. **选择 MAX API 线路** — 在安装开始前先对两条 HTTPS 线路各执行 10 次 ping，优先选择丢包率更低的线路
 5. **安装依赖** — 自动安装 Git（Claude Code 需要）和 Node.js 20+
 6. **安装工具** — Codex CLI / Gemini CLI 默认走国内镜像；Claude Code 为确保 Windows 原生二进制完整，固定走官方 npm 源
 7. **配置完成** — 自动写入配置文件、禁用 PowerShell `.ps1` shim、尝试修复执行策略，并执行一次真实 API 调用测试
@@ -120,9 +120,8 @@ npm config set registry https://registry.npmmirror.com
 - `https://new.28.al`
 - `https://new.1huanlesap02.top`
 
-预检查阶段会分别对两条线路执行 10 次 ping，优先选择丢包率更低的线路；如果丢包率相同，则再比较平均延迟。选中的线路会用于：
+安装开始前会分别对两条线路执行 10 次 ping，优先选择丢包率更低的线路；如果丢包率相同，则再比较平均延迟。选中的线路会用于：
 
-- 安装前的 MAX API 连通性预检查
 - Claude / Codex / Gemini 的配置写入
 - 安装结束后的真实调用测试
 
@@ -135,8 +134,6 @@ npm config set registry https://registry.npmmirror.com
 - CLI 真的能发请求并拿到返回
 
 所以脚本会对每个安装成功的工具发起一次极小的真实请求，验证连通性。当前测试题是一个极小的数学题，只会产生很少的 token 消耗。
-
-如果安装前的 MAX API 预检查已经明确失败，例如服务不可达、API Key 未通过认证或端点返回异常状态，脚本会先把这个问题单独打印出来，并跳过最终真实调用测试，避免把 API 故障误判成 CLI 安装故障。
 
 ### 想更换 MAX API Key 或模型
 
@@ -153,7 +150,7 @@ npm config set registry https://registry.npmmirror.com
 - Claude Code：脚本会写入 `settings.json`，并清理旧版本脚本遗留的 `ANTHROPIC_*` 用户环境变量，避免冲突。
 - Codex CLI：官方配置文件格式是 `TOML`，不是 JSON；脚本会写入 `%USERPROFILE%\.codex\config.toml`。
 - Gemini CLI：当前官方版本在 API Key 模式下仍要求 `GEMINI_API_KEY` 环境变量；脚本会同时写入 `settings.json` 和该环境变量。
-- 每次安装后，脚本都会把 MAX API 预检查结果、最终写入的配置内容、PowerShell shim 清理结果、执行策略诊断和真实调用测试结果打印到终端，并在覆盖前自动备份旧配置文件。
+- 每次安装后，脚本都会把 MAX API 线路选择结果、最终写入的配置内容、PowerShell shim 清理结果、执行策略诊断和真实调用测试结果打印到终端，并在覆盖前自动备份旧配置文件。
 
 ### 想卸载某个工具
 
