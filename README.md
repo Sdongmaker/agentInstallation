@@ -2,7 +2,7 @@
 
 MAX API 一键安装 **Claude Code**、**Codex CLI**、**Gemini CLI** 三大 AI 编程助手，专为中国大陆用户优化。
 
-自动处理：Node.js/Git 依赖安装、npm 源选择与加速、API 配置、PowerShell 兼容修复，并在安装后打印最终写入的配置和一次真实调用测试结果，便于排查问题。
+自动处理：Node.js/Git 依赖安装、npm 源选择与加速、API 配置、PowerShell 兼容修复。
 
 ## 一键安装
 
