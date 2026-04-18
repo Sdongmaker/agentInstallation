@@ -611,8 +611,8 @@ function Install-PowerShellCliWrappers {
     $wrapperBody = Get-PowerShellWrapperFunctionBody -Commands $uniqueCommands
 
     $profilePaths = @(
-        Join-Path $env:USERPROFILE "Documents\WindowsPowerShell\profile.ps1",
-        Join-Path $env:USERPROFILE "Documents\PowerShell\profile.ps1"
+        (Join-Path $env:USERPROFILE "Documents\WindowsPowerShell\profile.ps1"),
+        (Join-Path $env:USERPROFILE "Documents\PowerShell\profile.ps1")
     ) | Select-Object -Unique
 
     foreach ($profilePath in $profilePaths) {
