@@ -585,8 +585,10 @@ function Install-ClaudeCode {
     [System.IO.File]::WriteAllText($configPath, $claudeConfig, $Script:UTF8NoBom)
     Write-Success "配置已写入: $configPath"
 
-    # 注意：不设置 ANTHROPIC_* 持久化环境变量，避免与 ccswitch 等配置切换工具冲突
-    # Claude Code 会从 settings.json 的 env 字段读取这些值
+    # 设置持久化环境变量（Claude Code 从进程环境变量读取 API 配置，settings.json 的 env 字段仅用于子进程）
+    Set-PersistentEnvVar "ANTHROPIC_BASE_URL" $Script:API_BASE_URL
+    Set-PersistentEnvVar "ANTHROPIC_API_KEY" $ApiKey
+    Set-PersistentEnvVar "ANTHROPIC_MODEL" $Script:CLAUDE_MODEL
 
     return $true
 }
