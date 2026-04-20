@@ -28,11 +28,28 @@ $Script:NODE_MIRROR    = "https://npmmirror.com/mirrors/node"
 $Script:NODE_VERSION   = "v20.18.1"
 $Script:GIT_VERSION    = "2.47.1"
 $Script:GIT_RELEASE    = "v2.47.1.windows.2"
-$Script:INSTALLER_VERSION = "v2.2"
+$Script:INSTALLER_VERSION = "v2.3"
 
 $Script:CLAUDE_MODEL = "claude-opus-4-6"
 $Script:CODEX_MODEL  = "gpt-5.4"
 $Script:GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
+$Script:VSCodeExtensions = @(
+    [PSCustomObject]@{
+        Key         = "claude"
+        DisplayName = "Claude Code"
+        ExtensionId = "anthropic.claude-code"
+    },
+    [PSCustomObject]@{
+        Key         = "codex"
+        DisplayName = "Codex"
+        ExtensionId = "openai.chatgpt"
+    },
+    [PSCustomObject]@{
+        Key         = "gemini"
+        DisplayName = "Gemini Code Assist"
+        ExtensionId = "Google.geminicodeassist"
+    }
+)
 
 $Script:UTF8NoBom = New-Object System.Text.UTF8Encoding($false)
 $Script:NpmExe = $null
@@ -281,6 +298,57 @@ function Invoke-ToolCommand {
     return $details.OutputText
 }
 
+function Invoke-CommandPathDetailed {
+    param(
+        [string]$CommandPath,
+        [string[]]$Arguments,
+        [switch]$SuppressOutput
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CommandPath) -or -not (Test-Path $CommandPath)) {
+        return [PSCustomObject]@{
+            Found      = $false
+            Path       = $CommandPath
+            ExitCode   = $null
+            Output     = @()
+            OutputText = $null
+        }
+    }
+
+    try {
+        $output = @(& $CommandPath @Arguments 2>&1)
+        $exitCode = $LASTEXITCODE
+        $lines = @($output | ForEach-Object { "$_" })
+
+        if (-not $SuppressOutput) {
+            foreach ($line in $lines) {
+                Write-Host "    $line" -ForegroundColor DarkGray
+            }
+        }
+
+        return [PSCustomObject]@{
+            Found      = $true
+            Path       = $CommandPath
+            ExitCode   = $exitCode
+            Output     = $lines
+            OutputText = (($lines -join "`n").Trim())
+        }
+    } catch {
+        $message = $_.Exception.Message
+        if (-not $SuppressOutput -and -not [string]::IsNullOrWhiteSpace($message)) {
+            Write-Host "    $message" -ForegroundColor DarkGray
+        }
+
+        return [PSCustomObject]@{
+            Found      = $true
+            Path       = $CommandPath
+            ExitCode   = 1
+            Output     = @($message)
+            OutputText = $message
+        }
+    }
+}
+
 function Test-ToolExists {
     param([string]$Command)
 
@@ -314,6 +382,182 @@ function Get-NodeMajorVersion {
 
 function Test-WingetAvailable {
     return (Test-CommandExists "winget")
+}
+
+function Get-VSCodeVersion {
+    param([string]$CommandPath)
+
+    $details = Invoke-CommandPathDetailed -CommandPath $CommandPath -Arguments @("--version") -SuppressOutput
+    if (-not $details.Found -or $details.ExitCode -ne 0) {
+        return $null
+    }
+
+    return (Get-PrimaryOutputLine -Lines $details.Output)
+}
+
+function Get-VSCodeInstallRootFromPath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return $null
+    }
+
+    $fullPath = $Path.Trim('"')
+    if (-not (Test-Path $fullPath)) {
+        return $null
+    }
+
+    $leaf = Split-Path -Path $fullPath -Leaf
+    if ($leaf -ieq "code.cmd" -or $leaf -ieq "code") {
+        return (Split-Path -Path (Split-Path -Path $fullPath -Parent) -Parent)
+    }
+
+    if ($leaf -ieq "Code.exe") {
+        return (Split-Path -Path $fullPath -Parent)
+    }
+
+    if ((Get-Item -LiteralPath $fullPath -ErrorAction SilentlyContinue) -is [System.IO.DirectoryInfo]) {
+        return $fullPath
+    }
+
+    return (Split-Path -Path $fullPath -Parent)
+}
+
+function Get-VSCodeCommandCandidatesForInstallRoot {
+    param([string]$InstallRoot)
+
+    if ([string]::IsNullOrWhiteSpace($InstallRoot)) {
+        return @()
+    }
+
+    $candidates = New-Object System.Collections.ArrayList
+    foreach ($candidate in @(
+        (Join-Path $InstallRoot "bin\code.cmd"),
+        (Join-Path $InstallRoot "bin\code"),
+        (Join-Path $InstallRoot "Code.exe")
+    )) {
+        if ([string]::IsNullOrWhiteSpace($candidate)) { continue }
+        if ($candidates -contains $candidate) { continue }
+        [void]$candidates.Add($candidate)
+    }
+
+    return @($candidates)
+}
+
+function Parse-ExecutableReferencePath {
+    param([string]$Reference)
+
+    if ([string]::IsNullOrWhiteSpace($Reference)) {
+        return $null
+    }
+
+    $value = $Reference.Trim()
+    if ($value.StartsWith('"')) {
+        $closingQuote = $value.IndexOf('"', 1)
+        if ($closingQuote -gt 1) {
+            return $value.Substring(1, $closingQuote - 1)
+        }
+    }
+
+    if ($value -match '^(.*?\.exe)(?:,\d+)?$') {
+        return $Matches[1].Trim('"')
+    }
+
+    return $value.Trim('"')
+}
+
+function Find-VSCodeCliPathFromInstallRoot {
+    param([string]$InstallRoot)
+
+    foreach ($candidate in (Get-VSCodeCommandCandidatesForInstallRoot -InstallRoot $InstallRoot)) {
+        if (Test-Path $candidate) {
+            return $candidate
+        }
+    }
+
+    return $null
+}
+
+function Get-VSCodeInstallation {
+    $pathCommand = Get-Command "code.cmd" -ErrorAction SilentlyContinue
+    if (-not $pathCommand) {
+        $pathCommand = Get-Command "code" -ErrorAction SilentlyContinue
+    }
+    if ($pathCommand) {
+        $version = Get-VSCodeVersion -CommandPath $pathCommand.Source
+        return [PSCustomObject]@{
+            Detected   = $true
+            CliPath    = $pathCommand.Source
+            Version    = $version
+            Source     = "PATH 中的 VS Code CLI"
+            InstallDir = Get-VSCodeInstallRootFromPath -Path $pathCommand.Source
+        }
+    }
+
+    $defaultRoots = @(
+        (Join-Path $env:LOCALAPPDATA "Programs\Microsoft VS Code"),
+        (Join-Path $env:ProgramFiles "Microsoft VS Code"),
+        $(if (${env:ProgramFiles(x86)}) { Join-Path ${env:ProgramFiles(x86)} "Microsoft VS Code" } else { $null })
+    ) | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique
+
+    foreach ($installRoot in $defaultRoots) {
+        $cliPath = Find-VSCodeCliPathFromInstallRoot -InstallRoot $installRoot
+        if (-not $cliPath) { continue }
+
+        return [PSCustomObject]@{
+            Detected   = $true
+            CliPath    = $cliPath
+            Version    = Get-VSCodeVersion -CommandPath $cliPath
+            Source     = "默认安装目录"
+            InstallDir = $installRoot
+        }
+    }
+
+    $registryPaths = @(
+        "HKCU:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKCU:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*",
+        "HKLM:\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall\*"
+    )
+
+    foreach ($registryPath in $registryPaths) {
+        $entries = @(Get-ItemProperty -Path $registryPath -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq "Microsoft Visual Studio Code" })
+        foreach ($entry in $entries) {
+            $installRoots = New-Object System.Collections.ArrayList
+            if (-not [string]::IsNullOrWhiteSpace($entry.InstallLocation)) {
+                [void]$installRoots.Add($entry.InstallLocation.Trim())
+            }
+
+            $displayIconPath = Parse-ExecutableReferencePath -Reference $entry.DisplayIcon
+            if (-not [string]::IsNullOrWhiteSpace($displayIconPath)) {
+                $displayIconRoot = Get-VSCodeInstallRootFromPath -Path $displayIconPath
+                if (-not [string]::IsNullOrWhiteSpace($displayIconRoot) -and -not ($installRoots -contains $displayIconRoot)) {
+                    [void]$installRoots.Add($displayIconRoot)
+                }
+            }
+
+            foreach ($installRoot in $installRoots) {
+                $cliPath = Find-VSCodeCliPathFromInstallRoot -InstallRoot $installRoot
+                if (-not $cliPath) { continue }
+
+                return [PSCustomObject]@{
+                    Detected   = $true
+                    CliPath    = $cliPath
+                    Version    = Get-VSCodeVersion -CommandPath $cliPath
+                    Source     = "注册表卸载信息"
+                    InstallDir = $installRoot
+                }
+            }
+        }
+    }
+
+    return [PSCustomObject]@{
+        Detected   = $false
+        CliPath    = $null
+        Version    = $null
+        Source     = $null
+        InstallDir = $null
+    }
 }
 
 function Install-WithWinget {
@@ -551,6 +795,60 @@ function New-ToolResult {
         warnings          = (New-Object System.Collections.ArrayList)
         failure_reason    = $null
     }
+}
+
+function Get-VSCodeExtensionDefinition {
+    param([string]$Key)
+
+    foreach ($extension in $Script:VSCodeExtensions) {
+        if ($extension.Key -eq $Key) {
+            return $extension
+        }
+    }
+
+    return $null
+}
+
+function New-VSCodeExtensionResult {
+    param([object]$Definition)
+
+    return [PSCustomObject]@{
+        key             = $Definition.Key
+        display_name    = $Definition.DisplayName
+        extension_id    = $Definition.ExtensionId
+        selected        = $false
+        installed       = $false
+        already_present = $false
+        warnings        = (New-Object System.Collections.ArrayList)
+        failure_reason  = $null
+    }
+}
+
+function Get-VSCodeInstalledExtensions {
+    param([object]$VSCodeInstallation)
+
+    $extensions = @{}
+    if ($null -eq $VSCodeInstallation -or -not $VSCodeInstallation.Detected) {
+        return $extensions
+    }
+
+    $details = Invoke-CommandPathDetailed -CommandPath $VSCodeInstallation.CliPath -Arguments @("--list-extensions", "--show-versions") -SuppressOutput
+    if (-not $details.Found -or $details.ExitCode -ne 0) {
+        return $extensions
+    }
+
+    foreach ($line in $details.Output) {
+        $trimmed = "$line".Trim()
+        if ([string]::IsNullOrWhiteSpace($trimmed)) { continue }
+
+        $parts = $trimmed.Split("@")
+        $extensionId = $parts[0].Trim()
+        if ([string]::IsNullOrWhiteSpace($extensionId)) { continue }
+
+        $extensions[$extensionId.ToLowerInvariant()] = if ($parts.Length -gt 1) { $parts[1].Trim() } else { $null }
+    }
+
+    return $extensions
 }
 
 function Add-ToolWarning {
@@ -1130,13 +1428,19 @@ function Test-Environment {
 
     if (-not ($env:OS -eq "Windows_NT")) {
         Write-Err "该安装器仅支持 Windows。"
-        return $false
+        return [PSCustomObject]@{
+            Success           = $false
+            VSCodeInstallation = $null
+        }
     }
     Write-Success "操作系统: Windows"
 
     if (-not [System.Environment]::Is64BitOperatingSystem) {
         Write-Err "该安装器仅支持 64 位 Windows。"
-        return $false
+        return [PSCustomObject]@{
+            Success           = $false
+            VSCodeInstallation = $null
+        }
     }
     Write-Success "系统架构: x86_64"
 
@@ -1154,7 +1458,24 @@ function Test-Environment {
         Write-Warn "winget: 不可用。需要时将回退到直接下载方案。"
     }
 
-    return $true
+    $vsCodeInstallation = Get-VSCodeInstallation
+    if ($vsCodeInstallation.Detected) {
+        $versionText = if ([string]::IsNullOrWhiteSpace($vsCodeInstallation.Version)) {
+            ""
+        } else {
+            " $($vsCodeInstallation.Version)"
+        }
+
+        Write-Success "VS Code: 已检测到$versionText"
+        Write-Info "VS Code 来源: $($vsCodeInstallation.Source)"
+    } else {
+        Write-Info "VS Code: 未检测到，将跳过 VS Code 扩展安装。"
+    }
+
+    return [PSCustomObject]@{
+        Success           = $true
+        VSCodeInstallation = $vsCodeInstallation
+    }
 }
 
 function Show-ToolMenu {
@@ -1192,6 +1513,78 @@ function Show-ToolMenu {
         }
 
         Write-Warn "无效选项。请输入 1-3，可用逗号分隔多选，或输入 A 表示全部安装。"
+    }
+}
+
+function Show-VSCodeExtensionMenu {
+    param(
+        [string[]]$SelectedTools,
+        [object]$VSCodeInstallation
+    )
+
+    Write-Step "选择要安装的 VS Code 扩展"
+    Write-Host ""
+
+    if ($VSCodeInstallation -and $VSCodeInstallation.Detected) {
+        $versionText = if ([string]::IsNullOrWhiteSpace($VSCodeInstallation.Version)) {
+            "版本未知"
+        } else {
+            $VSCodeInstallation.Version
+        }
+        Write-Host "  已检测到 VS Code: $versionText" -ForegroundColor White
+        Write-Host "  命令路径: $($VSCodeInstallation.CliPath)" -ForegroundColor DarkGray
+    }
+
+    $recommended = @(
+        $SelectedTools |
+            ForEach-Object {
+                $definition = Get-VSCodeExtensionDefinition -Key $_
+                if ($definition) { $definition.DisplayName }
+            } |
+            Select-Object -Unique
+    )
+    if ($recommended.Count -gt 0) {
+        Write-Host "  推荐安装: $($recommended -join '、')" -ForegroundColor DarkGray
+    }
+
+    Write-Host ""
+    Write-Host "  [1] Claude Code" -ForegroundColor White
+    Write-Host "  [2] Codex" -ForegroundColor White
+    Write-Host "  [3] Gemini Code Assist" -ForegroundColor White
+    Write-Host ""
+    Write-Host "  [A] 全部安装" -ForegroundColor Yellow
+    Write-Host "  [N] 跳过" -ForegroundColor Yellow
+    Write-Host ""
+
+    while ($true) {
+        $choice = Read-Host "  请输入选项（例如：1,3 或 A；输入 N 跳过）"
+        $choice = $choice.Trim().ToUpper()
+
+        if ($choice -eq "N") {
+            return @()
+        }
+
+        if ($choice -eq "A") {
+            return @("claude", "codex", "gemini")
+        }
+
+        $extensions = @()
+        $valid = $true
+
+        foreach ($item in ($choice -split '[,\s]+' | Where-Object { $_ })) {
+            switch ($item) {
+                "1" { $extensions += "claude" }
+                "2" { $extensions += "codex" }
+                "3" { $extensions += "gemini" }
+                default { $valid = $false }
+            }
+        }
+
+        if ($valid -and $extensions.Count -gt 0) {
+            return ($extensions | Select-Object -Unique)
+        }
+
+        Write-Warn "无效选项。请输入 1-3，可用逗号分隔多选，输入 A 表示全部安装，或输入 N 跳过。"
     }
 }
 
@@ -2101,6 +2494,71 @@ function Install-GeminiCli {
     return (Complete-ToolResult -Result $result)
 }
 
+function Install-VSCodeExtensions {
+    param(
+        [object]$VSCodeInstallation,
+        [string[]]$SelectedExtensions
+    )
+
+    $results = @{}
+    if ($null -eq $VSCodeInstallation -or -not $VSCodeInstallation.Detected) {
+        return $results
+    }
+
+    $selected = @($SelectedExtensions | Where-Object { -not [string]::IsNullOrWhiteSpace($_) } | Select-Object -Unique)
+    if ($selected.Count -eq 0) {
+        return $results
+    }
+
+    Write-Step "安装 VS Code 扩展"
+    Write-Info "将使用 VS Code CLI: $($VSCodeInstallation.CliPath)"
+
+    $installedExtensions = Get-VSCodeInstalledExtensions -VSCodeInstallation $VSCodeInstallation
+
+    foreach ($key in $selected) {
+        $definition = Get-VSCodeExtensionDefinition -Key $key
+        if (-not $definition) { continue }
+
+        $result = New-VSCodeExtensionResult -Definition $definition
+        $result.selected = $true
+        $results[$key] = $result
+
+        if ($installedExtensions.ContainsKey($definition.ExtensionId.ToLowerInvariant())) {
+            $result.already_present = $true
+            Write-Info "$($definition.DisplayName) 扩展已存在，将执行覆盖安装刷新到最新版本。"
+        }
+
+        if ($key -eq "codex") {
+            Add-ToolWarning -Result $result -Message "Codex VS Code 扩展当前在 Windows 上仍属实验性功能；如遇异常，请优先使用 Codex CLI。"
+        }
+
+        Write-Info "正在安装 VS Code 扩展: $($definition.DisplayName) ($($definition.ExtensionId)) ..."
+        $installDetails = Invoke-CommandPathDetailed -CommandPath $VSCodeInstallation.CliPath -Arguments @("--install-extension", $definition.ExtensionId, "--force")
+        if (-not $installDetails.Found) {
+            Set-ToolFailure -Result $result -Message "$($definition.DisplayName) 扩展安装失败: 未找到 VS Code CLI。"
+            continue
+        }
+
+        if ($installDetails.ExitCode -eq 0) {
+            $result.installed = $true
+            if ($result.already_present) {
+                Write-Success "$($definition.DisplayName) 扩展已刷新完成。"
+            } else {
+                Write-Success "$($definition.DisplayName) 扩展安装完成。"
+            }
+            continue
+        }
+
+        $snippet = Format-OutputSnippet -Text $installDetails.OutputText
+        if ([string]::IsNullOrWhiteSpace($snippet)) {
+            $snippet = "命令退出码 $($installDetails.ExitCode)"
+        }
+        Set-ToolFailure -Result $result -Message "$($definition.DisplayName) 扩展安装失败: $snippet"
+    }
+
+    return $results
+}
+
 function Get-ActualCallPrompt {
     return "This is a post-install connectivity check. Do not use tools. What is 17 multiplied by 19? Reply with only the number."
 }
@@ -2295,7 +2753,9 @@ function Show-Summary {
     param(
         [string[]]$SelectedTools,
         [hashtable]$Results,
-        [object]$ApiRouteSelection
+        [object]$ApiRouteSelection,
+        [object]$VSCodeInstallation,
+        [hashtable]$VSCodeExtensionResults
     )
 
     Write-Host ""
@@ -2362,6 +2822,55 @@ function Show-Summary {
         }
     }
 
+    Write-Host ""
+    Write-Host "  VS Code 扩展" -ForegroundColor Yellow
+    Write-Host ""
+
+    if ($null -eq $VSCodeInstallation -or -not $VSCodeInstallation.Detected) {
+        Write-Host "    状态: 未检测到 VS Code，已跳过扩展安装。" -ForegroundColor DarkGray
+    } else {
+        $versionText = if ([string]::IsNullOrWhiteSpace($VSCodeInstallation.Version)) {
+            "版本未知"
+        } else {
+            $VSCodeInstallation.Version
+        }
+        Write-Host "    VS Code: $versionText" -ForegroundColor White
+        Write-Host "      来源: $($VSCodeInstallation.Source)" -ForegroundColor DarkGray
+
+        $extensionResults = @()
+        foreach ($definition in $Script:VSCodeExtensions) {
+            if ($VSCodeExtensionResults -and $VSCodeExtensionResults.ContainsKey($definition.Key)) {
+                $extensionResults += $VSCodeExtensionResults[$definition.Key]
+            }
+        }
+
+        if ($extensionResults.Count -eq 0) {
+            Write-Host "    状态: 已跳过扩展安装。" -ForegroundColor DarkGray
+        } else {
+            foreach ($extensionResult in $extensionResults) {
+                if ($extensionResult.installed) {
+                    $label = if ($extensionResult.already_present) { "成功（已存在并已刷新）" } else { "成功" }
+                    $color = "Green"
+                } else {
+                    $label = "失败"
+                    $color = "Red"
+                }
+
+                Write-Host "    $($extensionResult.display_name) : " -NoNewline -ForegroundColor White
+                Write-Host $label -ForegroundColor $color
+                Write-Host "      ID: $($extensionResult.extension_id)" -ForegroundColor DarkGray
+
+                if (-not [string]::IsNullOrWhiteSpace($extensionResult.failure_reason)) {
+                    Write-Host "      原因: $($extensionResult.failure_reason)" -ForegroundColor Red
+                }
+
+                foreach ($warning in $extensionResult.warnings) {
+                    Write-Host "      警告: $warning" -ForegroundColor Yellow
+                }
+            }
+        }
+    }
+
     $successfulTools = @($SelectedTools | Where-Object { $Results.ContainsKey($_) -and $Results[$_].success })
     if ($successfulTools.Count -gt 0) {
         Write-Host ""
@@ -2404,13 +2913,32 @@ function Main {
     Clear-Host
     Write-Banner
 
-    if (-not (Test-Environment)) {
+    $environmentCheck = Test-Environment
+    if (-not $environmentCheck.Success) {
         Write-Err "环境检测失败，安装已终止。"
         return
     }
+    $vsCodeInstallation = $environmentCheck.VSCodeInstallation
 
     $selectedTools = Show-ToolMenu
     Write-Info "已选择: $($selectedTools -join ', ')"
+
+    $selectedVSCodeExtensions = @()
+    if ($vsCodeInstallation -and $vsCodeInstallation.Detected) {
+        $selectedVSCodeExtensions = Show-VSCodeExtensionMenu -SelectedTools $selectedTools -VSCodeInstallation $vsCodeInstallation
+        if ($selectedVSCodeExtensions.Count -gt 0) {
+            $selectedExtensionNames = @(
+                $selectedVSCodeExtensions |
+                    ForEach-Object {
+                        $definition = Get-VSCodeExtensionDefinition -Key $_
+                        if ($definition) { $definition.DisplayName }
+                    }
+            )
+            Write-Info "已选择 VS Code 扩展: $($selectedExtensionNames -join ', ')"
+        } else {
+            Write-Info "已跳过 VS Code 扩展安装。"
+        }
+    }
 
     $apiKey = Read-ApiKey
     $apiRouteSelection = Select-MaxApiRoute
@@ -2452,7 +2980,12 @@ function Main {
     Repair-PowerShellExecutionPolicy
     Run-ActualCallTests -SelectedTools $selectedTools -Results $results
 
-    Show-Summary -SelectedTools $selectedTools -Results $results -ApiRouteSelection $apiRouteSelection
+    $vsCodeExtensionResults = @{}
+    if ($vsCodeInstallation -and $vsCodeInstallation.Detected -and $selectedVSCodeExtensions.Count -gt 0) {
+        $vsCodeExtensionResults = Install-VSCodeExtensions -VSCodeInstallation $vsCodeInstallation -SelectedExtensions $selectedVSCodeExtensions
+    }
+
+    Show-Summary -SelectedTools $selectedTools -Results $results -ApiRouteSelection $apiRouteSelection -VSCodeInstallation $vsCodeInstallation -VSCodeExtensionResults $vsCodeExtensionResults
 
     Write-Host ""
     Write-Host "  安装完成。" -ForegroundColor Green
