@@ -4,6 +4,10 @@ MAX API 一键安装 **Claude Code**、**Codex CLI**、**Gemini CLI** 三大 AI 
 
 自动处理：Node.js/Git 依赖安装、npm 源选择与加速、安装前 MAX API 双线路 ping 选线、API 配置、PowerShell 兼容修复；如检测到 **VS Code**，还可按需安装对应扩展。
 
+## 项目预览
+
+![MAX API - AI 编程助手一键安装工具说明图](./assets/readme-overview.png)
+
 ## 一键安装
 
 在 PowerShell 中粘贴以下命令并回车：
