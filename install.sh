@@ -163,6 +163,13 @@ die() {
 banner() {
   cat <<EOF
 
+  ███╗   ███╗ █████╗ ██╗  ██╗     █████╗ ██████╗ ██╗
+  ████╗ ████║██╔══██╗╚██╗██╔╝    ██╔══██╗██╔══██╗██║
+  ██╔████╔██║███████║ ╚███╔╝     ███████║██████╔╝██║
+  ██║╚██╔╝██║██╔══██║ ██╔██╗     ██╔══██║██╔═══╝ ██║
+  ██║ ╚═╝ ██║██║  ██║██╔╝ ██╗    ██║  ██║██║     ██║
+  ╚═╝     ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝    ╚═╝  ╚═╝╚═╝     ╚═╝
+
   MAX API Linux 一键安装工具 ${INSTALLER_VERSION}
   支持: Claude Code · Codex CLI · Gemini CLI
   服务: MAX API 自动测速选线
@@ -350,6 +357,85 @@ process_holds_path() {
   return 1
 }
 
+process_list_for_names() {
+  if command_exists ps; then
+    ps -eo pid=,comm=,args= 2>/dev/null | awk '
+      $2 ~ /^(apt|apt-get|dpkg|unattended-upgr|unattended-upgrades|dnf|yum|rpm|pacman)$/ {
+        print "PID " $1 " | " $0
+      }
+    ' | sed 's/[[:space:]]\+/ /g' | head -n 10
+  fi
+}
+
+lock_holder_details() {
+  local path="$1"
+  [[ -e "$path" ]] || return 0
+
+  if command_exists fuser; then
+    local pids
+    pids="$(fuser "$path" 2>/dev/null | tr ' ' '\n' | awk 'NF' | xargs 2>/dev/null || true)"
+    if [[ -n "$pids" ]]; then
+      local pid
+      for pid in $pids; do
+        if [[ -r "/proc/${pid}/cmdline" ]]; then
+          printf '锁文件 %s 被 PID %s 占用: %s\n' "$path" "$pid" "$(tr '\0' ' ' < "/proc/${pid}/cmdline" | sed 's/[[:space:]]*$//')"
+        else
+          printf '锁文件 %s 被 PID %s 占用\n' "$path" "$pid"
+        fi
+      done
+    fi
+  fi
+}
+
+package_manager_busy_details() {
+  local details=""
+  local processes
+  processes="$(process_list_for_names || true)"
+  if [[ -n "$processes" ]]; then
+    details="${details}相关进程:\n${processes}\n"
+  fi
+
+  case "$PKG_MANAGER" in
+    apt)
+      local lock_details=""
+      lock_details="$(
+        lock_holder_details /var/lib/dpkg/lock-frontend
+        lock_holder_details /var/lib/dpkg/lock
+        lock_holder_details /var/cache/apt/archives/lock
+      )"
+      ;;
+    dnf|yum)
+      local lock_details=""
+      lock_details="$(lock_holder_details /var/lib/rpm/.rpm.lock)"
+      ;;
+    pacman)
+      local lock_details=""
+      lock_details="$(lock_holder_details /var/lib/pacman/db.lck)"
+      ;;
+    *)
+      local lock_details=""
+      ;;
+  esac
+
+  if [[ -n "${lock_details:-}" ]]; then
+    details="${details}锁文件占用:\n${lock_details}\n"
+  fi
+
+  if [[ -z "$details" ]]; then
+    details="未能读取到具体占用进程；可能是包管理器短暂运行、权限限制或锁刚刚释放。"
+  fi
+
+  printf '%b' "$details"
+}
+
+print_package_manager_repair_options() {
+  warn "修复选项:"
+  warn "1. 继续等待系统更新结束。这是最安全的方式，后果是安装会晚几分钟完成。"
+  warn "2. 另开终端查看占用: ps -ef | grep -E 'apt|dpkg|unattended|dnf|yum|rpm|pacman'。后果是只观察，不改变系统状态。"
+  warn "3. 如果确认是 unattended-upgrades，可等待它结束；不建议强杀。强杀后果是可能留下 dpkg 半配置状态，需要运行 dpkg --configure -a 修复。"
+  warn "4. 只有确认没有 apt/dpkg 进程时，才考虑清理陈旧锁。误删活锁的后果是破坏包数据库。"
+}
+
 package_manager_busy() {
   case "$PKG_MANAGER" in
     apt)
@@ -380,9 +466,18 @@ wait_for_package_manager_locks() {
   local max_wait=120
   while package_manager_busy; do
     if [[ "$waited" -ge "$max_wait" ]]; then
+      package_manager_busy_details | while IFS= read -r line; do
+        [[ -n "$line" ]] && warn "$line"
+      done
+      print_package_manager_repair_options
       die "包管理器锁等待超过 ${max_wait} 秒。请关闭系统更新或其他安装进程后重试。"
     fi
-    warn "包管理器正在被占用，等待 5 秒后重试..."
+    warn "包管理器正在被占用，等待 5 秒后重试...（已等待 ${waited}/${max_wait} 秒）"
+    if [[ "$waited" -eq 0 || $((waited % 30)) -eq 0 ]]; then
+      package_manager_busy_details | while IFS= read -r line; do
+        [[ -n "$line" ]] && warn "$line"
+      done
+    fi
     sleep 5
     waited=$((waited + 5))
   done
