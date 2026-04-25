@@ -5,7 +5,7 @@ INSTALLER_VERSION="v1.0-linux"
 NODE_VERSION="v20.18.1"
 NODE_VERSION_NUMBER="${NODE_VERSION#v}"
 CLAUDE_MODEL="claude-opus-4-6"
-CODEX_MODEL="gpt-5.4"
+CODEX_MODEL="gpt-5.5"
 GEMINI_MODEL="gemini-3.1-flash-lite-preview"
 NPM_MIRROR="https://registry.npmmirror.com"
 NPM_OFFICIAL="https://registry.npmjs.org"
@@ -1228,6 +1228,21 @@ validate_tool_version() {
   printf '%s' "$version"
 }
 
+output_snippet() {
+  local text
+  text="$(printf '%s' "${1:-}" | tr '\n' ' ' | sed 's/[[:space:]]\+/ /g; s/^[[:space:]]//; s/[[:space:]]$//')"
+  if [[ -z "$text" ]]; then
+    return
+  fi
+
+  if [[ "${#text}" -le 360 ]]; then
+    printf '%s' "$text"
+    return
+  fi
+
+  printf '%s ... %s' "${text:0:180}" "${text: -180}"
+}
+
 install_tool() {
   local tool="$1"
   local display package command_name primary fallback config_path version
@@ -1439,7 +1454,7 @@ run_tool_actual_call() {
 
   if [[ "$code" -ne 0 ]]; then
     set_tool_field "$tool" "SMOKE" "失败"
-    append_tool_warning "$tool" "$display 实际调用测试失败，退出码 $code。输出摘要: $(printf '%s' "$raw_output" | tr '\n' ' ' | cut -c1-240)"
+    append_tool_warning "$tool" "$display 实际调用测试失败，退出码 $code。输出摘要: $(output_snippet "$raw_output")"
     return
   fi
 
@@ -1448,7 +1463,7 @@ run_tool_actual_call() {
     success "$display 实际调用成功。"
   else
     set_tool_field "$tool" "SMOKE" "失败: 返回不符合预期"
-    append_tool_warning "$tool" "$display 实际调用返回内容不包含 323。输出摘要: $(printf '%s' "$raw_output" | tr '\n' ' ' | cut -c1-240)"
+    append_tool_warning "$tool" "$display 实际调用返回内容不包含 323。输出摘要: $(output_snippet "$raw_output")"
   fi
 }
 

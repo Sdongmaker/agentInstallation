@@ -59,7 +59,7 @@ bash install.sh
 | 工具 | 厂商 | 默认模型 | 启动命令 |
 |------|------|---------|---------|
 | Claude Code | Anthropic | claude-opus-4-6 | `claude` |
-| Codex CLI | OpenAI | gpt-5.4 | `codex` |
+| Codex CLI | OpenAI | gpt-5.5 | `codex` |
 | Gemini CLI | Google | gemini-3.1-flash-lite-preview | `gemini` |
 
 ## 可选安装的 VS Code 扩展

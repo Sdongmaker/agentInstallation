@@ -31,7 +31,7 @@ $Script:GIT_RELEASE    = "v2.47.1.windows.2"
 $Script:INSTALLER_VERSION = "v2.3"
 
 $Script:CLAUDE_MODEL = "claude-opus-4-6"
-$Script:CODEX_MODEL  = "gpt-5.4"
+$Script:CODEX_MODEL  = "gpt-5.5"
 $Script:GEMINI_MODEL = "gemini-3.1-flash-lite-preview"
 $Script:VSCodeExtensions = @(
     [PSCustomObject]@{
