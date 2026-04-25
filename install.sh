@@ -387,6 +387,119 @@ lock_holder_details() {
   fi
 }
 
+package_manager_process_pids() {
+  local names=""
+  case "$PKG_MANAGER" in
+    apt)
+      names="apt apt-get dpkg unattended-upgr unattended-upgrades"
+      ;;
+    dnf|yum)
+      names="dnf yum rpm"
+      ;;
+    pacman)
+      names="pacman"
+      ;;
+  esac
+
+  {
+    local name
+    for name in $names; do
+      pgrep -x "$name" 2>/dev/null || true
+    done
+
+    if command_exists fuser; then
+      case "$PKG_MANAGER" in
+        apt)
+          fuser /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock 2>/dev/null || true
+          ;;
+        dnf|yum)
+          fuser /var/lib/rpm/.rpm.lock 2>/dev/null || true
+          ;;
+        pacman)
+          fuser /var/lib/pacman/db.lck 2>/dev/null || true
+          ;;
+      esac
+    fi
+  } | tr ' ' '\n' | awk -v self="$$" -v parent="$PPID" '/^[0-9]+$/ && $1 != self && $1 != parent { seen[$1]=1 } END { for (pid in seen) print pid }' | sort -n
+}
+
+pid_cmdline() {
+  local pid="$1"
+  if [[ -r "/proc/${pid}/cmdline" ]]; then
+    tr '\0' ' ' < "/proc/${pid}/cmdline" | sed 's/[[:space:]]*$//'
+  else
+    ps -p "$pid" -o args= 2>/dev/null || true
+  fi
+}
+
+send_signal_to_pid() {
+  local signal="$1"
+  local pid="$2"
+
+  if kill "-$signal" "$pid" 2>/dev/null; then
+    return 0
+  fi
+
+  if [[ "$IS_ROOT" -ne 1 && -n "$SUDO_CMD" ]]; then
+    "$SUDO_CMD" kill "-$signal" "$pid" 2>/dev/null
+    return $?
+  fi
+
+  return 1
+}
+
+terminate_package_manager_processes() {
+  local pids
+  pids="$(package_manager_process_pids)"
+  if [[ -z "$pids" ]]; then
+    warn "没有找到可终止的包管理器进程。"
+    return
+  fi
+
+  warn "即将向占用包管理器的进程发送 SIGTERM。后果：正在进行的系统更新或安装会被中断，可能需要后续修复 dpkg/rpm/pacman 状态。"
+  local pid
+  for pid in $pids; do
+    warn "SIGTERM PID $pid: $(pid_cmdline "$pid")"
+    if ! send_signal_to_pid TERM "$pid"; then
+      warn "无法终止 PID $pid，可能权限不足或进程已退出。"
+    fi
+  done
+
+  sleep 5
+  if ! package_manager_busy; then
+    success "包管理器占用已释放。"
+    return
+  fi
+
+  warn "发送 SIGTERM 后包管理器仍被占用。"
+  if [[ "$HAS_TTY" -ne 1 ]]; then
+    warn "无交互终端，不会发送 SIGKILL。"
+    return
+  fi
+
+  local confirm
+  confirm="$(prompt_line "  是否强制发送 SIGKILL？这可能破坏正在写入的包数据库。输入 KILL 确认，直接回车跳过: ")"
+  if [[ "$confirm" != "KILL" ]]; then
+    warn "已跳过 SIGKILL，继续等待或稍后退出。"
+    return
+  fi
+
+  pids="$(package_manager_process_pids)"
+  for pid in $pids; do
+    warn "SIGKILL PID $pid: $(pid_cmdline "$pid")"
+    if ! send_signal_to_pid KILL "$pid"; then
+      warn "无法强制终止 PID $pid，可能权限不足或进程已退出。"
+    fi
+  done
+
+  sleep 2
+  if package_manager_busy; then
+    warn "SIGKILL 后包管理器仍被占用，请手动检查进程和锁文件。"
+  else
+    success "包管理器占用已释放。"
+  fi
+}
+
 package_manager_busy_details() {
   local details=""
   local processes
@@ -436,6 +549,30 @@ print_package_manager_repair_options() {
   warn "4. 只有确认没有 apt/dpkg 进程时，才考虑清理陈旧锁。误删活锁的后果是破坏包数据库。"
 }
 
+prompt_package_manager_kill_option() {
+  if [[ "$HAS_TTY" -ne 1 ]]; then
+    warn "当前没有交互终端，不提供终止进程选项。"
+    return
+  fi
+
+  warn "可选操作: [W]继续等待 / [T]终止占用进程(SIGTERM) / [Q]退出安装。默认 W。"
+  local choice
+  choice="$(prompt_line "  请选择 W/T/Q: ")"
+  choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]' | xargs 2>/dev/null || true)"
+
+  case "$choice" in
+    t|term|kill)
+      terminate_package_manager_processes
+      ;;
+    q|quit|exit)
+      die "用户选择退出安装。"
+      ;;
+    *)
+      info "继续等待包管理器释放锁。"
+      ;;
+  esac
+}
+
 package_manager_busy() {
   case "$PKG_MANAGER" in
     apt)
@@ -477,6 +614,7 @@ wait_for_package_manager_locks() {
       package_manager_busy_details | while IFS= read -r line; do
         [[ -n "$line" ]] && warn "$line"
       done
+      prompt_package_manager_kill_option
     fi
     sleep 5
     waited=$((waited + 5))
